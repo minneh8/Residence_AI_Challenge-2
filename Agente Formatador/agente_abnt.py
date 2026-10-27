@@ -1,21 +1,19 @@
 import os
 import time
 import json
+import hashlib
 from google import genai
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# Escopos para ler e editar Google Docs e Drive
 SCOPES = [
     'https://www.googleapis.com/auth/documents',
-    'https://www.googleapis.com/auth/drive.readonly'
+    'https://www.googleapis.com/auth/drive'
 ]
 
-# Inicializa o cliente oficial da Gemini API
-# Certifique-se de ter a variável GEMINI_API_KEY configurada no seu ambiente
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "SUA_CHAVE")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -27,16 +25,25 @@ def autenticar_google_workspace():
 
     creds = None
     if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        except Exception:
+            creds = None
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                print(f"[AUTENTICAÇÃO] Renovação falhou ({e}). Gerando novo acesso...")
+                if os.path.exists(token_path):
+                    os.remove(token_path)
+                creds = None
+
+        if not creds:
             if not os.path.exists(credentials_path):
-                raise FileNotFoundError(f"Arquivo de credenciais não encontrado em: {credentials_path}")
+                raise FileNotFoundError(f"Arquivo 'credentials.json' não encontrado em: {credentials_path}")
             
-            # Carrega o cliente desktop corretamente
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
         
@@ -47,271 +54,352 @@ def autenticar_google_workspace():
     drive_service = build('drive', 'v3', credentials=creds)
     return docs_service, drive_service
 
-def revisar_texto_com_gemini(texto_original: str) -> str:
-    """Envia o conteúdo para a API do Gemini para revisar citações e referências ABNT."""
-    prompt_system = """
-    Você é um agente revisor especializado em normas ABNT.
-    Sua tarefa é analisar o texto fornecido e ajustar:
-    1. Formatação de referências bibliográficas ao final (autor em CAIXA ALTA, ordem alfabética, etc.).
-    2. Citações diretas e indiretas (ex: SOBRENOME, ano, p. X).
-    Retorne o texto ajustado mantendo o conteúdo original.
-    """
-    
-    modelos = ["gemini-2.5-flash", "gemini-2.5-pro"]
-    
-    for model_name in modelos:
-        try:
-            response = client_gemini.models.generate_content(
-                model=model_name,
-                contents=f"{prompt_system}\n\nTexto original:\n{texto_original}"
-            )
-            return response.text
-        except Exception as e:
-            print(f"[AGENTE ABNT] Modelo {model_name} indisponível. Tentando próximo...")
-            
-    return texto_original
+
+def calcular_hash_texto(texto: str) -> str:
+    """Calcula hash MD5 do texto para evitar chamadas desnecessárias à API."""
+    return hashlib.md5(texto.encode('utf-8')).hexdigest()
 
 
-def aplicar_formatacao_abnt_docs(docs_service, document_id: str):
-    """Aplica formatação estruturada de Artigo Científico ABNT (NBR 6022)."""
-    
-    # 1. Margens ABNT em Pontos (1 cm = 28.35 pt)
-    requests = [
-        {
-            'updateDocumentStyle': {
-                'documentStyle': {
-                    'marginTop': {'magnitude': 3 * 28.35, 'unit': 'PT'},
-                    'marginLeft': {'magnitude': 3 * 28.35, 'unit': 'PT'},
-                    'marginBottom': {'magnitude': 2 * 28.35, 'unit': 'PT'},
-                    'marginRight': {'magnitude': 2 * 28.35, 'unit': 'PT'},
-                },
-                'fields': 'marginTop,marginLeft,marginBottom,marginRight'
-            }
-        }
+def processar_texto_com_ia(texto_rascunho: str) -> dict:
+    """Submete o rascunho para a API do Gemini estruturando a resposta em JSON sem duplicar o resumo."""
+    prompt = f"""
+Você é um Revisor Acadêmico Sênior especializado em Artigos Científicos.
+Sua tarefa é analisar o rascunho fornecido, reescrever corrigindo TODA a ortografia e gramática, e estruturar a resposta ESTRITAMENTE como um objeto JSON.
+
+O JSON deve seguir a seguinte estrutura exata:
+{{
+  "titulo_principal": "TÍTULO DO ARTIGO EM CAIXA ALTA E CORRIGIDO",
+  "autores": "Nome do Autor ou Autores",
+  "resumo": "Texto completo do resumo corrigido sem erros de acentuação.",
+  "palavras_chave": "PALAVRAS-CHAVE: termo 1. termo 2. termo 3.",
+  "elementos": [
+    {{
+      "tipo": "TITULO_SECAO" ou "SUBTITULO_SECAO" ou "PARAGRAFO" ou "CITACAO_LONGA" ou "REFERENCIA",
+      "texto": "Texto do parágrafo ou título corrigido ortograficamente",
+      "numeracao": "2." ou "2.1" ou "[1]" ou null
+    }}
+  ]
+}}
+
+REGRAS OBRIGATÓRIAS DE ESTRUTURAÇÃO:
+1. O texto do resumo DEVE ficar no campo "resumo" do JSON. NÃO inclua o resumo nem o título "1. RESUMO" dentro do array "elementos".
+2. As seções dentro de "elementos" devem começar A PARTIR DA INTRODUÇÃO numeradas normalmente: 2. INTRODUÇÃO, 3. DESENVOLVIMENTO, 3.1 Subtítulo, 4. CONCLUSÃO.
+3. Na seção de REFERÊNCIAS ao final, numere cada item no formato [1], [2], [3]... em ordem alfabética.
+4. Corrija 100% dos erros de grafia, pontuação e acentuação de todo o texto.
+5. Responda APENAS o objeto JSON válido.
+
+Texto Rascunho Original:
+{texto_rascunho}
+"""
+
+    modelos = [
+        "gemini-3.1-flash-lite",
+        "gemini-flash-latest"
     ]
 
-    doc = docs_service.documents().get(documentId=document_id).execute()
-    content = doc.get('body').get('content', [])
+    for model_name in modelos:
+        for tentativa in range(1, 4):
+            try:
+                print(f"[AGENTE ABNT] Processando com {model_name} (tentativa {tentativa})...")
+                response = client_gemini.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                
+                raw_text = response.text.strip()
+                
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                if raw_text.startswith("```"):
+                    raw_text = raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
 
-    is_primeiro_paragrafo = True
+                data = json.loads(raw_text.strip())
+                print(f"[AGENTE ABNT] Sucesso no processamento com {model_name}!")
+                return data
+
+            except Exception as e:
+                err_msg = str(e)
+                if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                    tempo_espera = tentativa * 3
+                    print(f"[AGENTE ABNT] Modelo {model_name} ocupado (503). Aguardando {tempo_espera}s...")
+                    time.sleep(tempo_espera)
+                elif "404" in err_msg or "NOT_FOUND" in err_msg:
+                    print(f"[AGENTE ABNT] Modelo {model_name} indisponível (404). Tentando próximo...")
+                    break
+                else:
+                    print(f"[AGENTE ABNT] Erro ao processar com {model_name}: {e}")
+                    time.sleep(1)
+
+    raise RuntimeError("Não foi possível processar o rascunho com os modelos Gemini disponíveis.")
+
+
+def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict):
+    """Atualiza o conteúdo no Google Docs sem duplicação de seções."""
+    print("[AGENTE ABNT] Reconstruindo texto no Google Docs...")
+    
+    doc = docs_service.documents().get(documentId=document_id).execute()
+    body_content = doc.get('body', {}).get('content', [])
+    end_index = body_content[-1].get('endIndex', 1) - 1
+
+    requests = []
+
+    # 1. Limpa o texto antigo
+    if end_index > 1:
+        requests.append({
+            'deleteContentRange': {
+                'range': {'startIndex': 1, 'endIndex': end_index}
+            }
+        })
+
+    # 2. Monta a estrutura limpa
+    titulo = artigo.get("titulo_principal", "").strip()
+    autores = artigo.get("autores", "").strip()
+    resumo = artigo.get("resumo", "").strip()
+    palavras_chave = artigo.get("palavras_chave", "").strip()
+    elementos = artigo.get("elementos", [])
+
+    texto_gerado = f"{titulo}\n"
+    texto_gerado += f"{autores}\n\n"
+    texto_gerado += f"1. RESUMO\n{resumo}\n"
+    texto_gerado += f"{palavras_chave}\n\n"
+
+    for el in elementos:
+        tipo = el.get("tipo", "PARAGRAFO")
+        num = el.get("numeracao")
+        txt = el.get("texto", "").strip()
+
+        # Filtra elementos para evitar qualquer duplicação do resumo no loop
+        if "resumo" in txt.lower() and (num in ["1.", "1"] or not num):
+            continue
+
+        if tipo in ["TITULO_SECAO", "SUBTITULO_SECAO", "REFERENCIA"] and num:
+            texto_gerado += f"{num} {txt}\n"
+        else:
+            texto_gerado += f"{txt}\n"
+
+    requests.append({
+        'insertText': {
+            'location': {'index': 1},
+            'text': texto_gerado
+        }
+    })
+
+    # Margens Oficiais ABNT: Superior 3cm, Esquerda 3cm, Inferior 2cm, Direita 2cm
+    requests.append({
+        'updateDocumentStyle': {
+            'documentStyle': {
+                'marginTop': {'magnitude': 3 * 28.35, 'unit': 'PT'},
+                'marginLeft': {'magnitude': 3 * 28.35, 'unit': 'PT'},
+                'marginBottom': {'magnitude': 2 * 28.35, 'unit': 'PT'},
+                'marginRight': {'magnitude': 2 * 28.35, 'unit': 'PT'},
+            },
+            'fields': 'marginTop,marginLeft,marginBottom,marginRight'
+        }
+    })
+
+    docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+    # 3. Estilização Visual
+    print("[AGENTE ABNT] Aplicando estilos visuais...")
+    doc_atualizado = docs_service.documents().get(documentId=document_id).execute()
+    content = doc_atualizado.get('body', {}).get('content', [])
+
+    style_requests = []
 
     for item in content:
-        if 'paragraph' in item:
-            start_index = item.get('startIndex')
-            end_index = item.get('endIndex')
-            
-            # Ignora linhas vazias
-            if start_index == end_index or (end_index - start_index <= 1):
-                continue
+        if 'paragraph' not in item:
+            continue
 
-            # Extrai o texto do parágrafo
-            p_text = ""
-            for el in item.get('paragraph', {}).get('elements', []):
-                if 'textRun' in el:
-                    p_text += el.get('textRun', {}).get('content', '')
-            
-            p_text_clean = p_text.strip()
-            heading_type = item.get('paragraph', {}).get('paragraphStyle', {}).get('namedStyleType', '')
+        start_index = item.get('startIndex')
+        end_index = item.get('endIndex')
+        
+        if start_index == end_index or (end_index - start_index <= 1):
+            continue
 
-            # --- A. TÍTULO PRINCIPAL DO ARTIGO ---
-            if is_primeiro_paragrafo and not p_text_clean.lower().startswith("resumo"):
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'textStyle': {
-                            'weightedFontFamily': {'fontFamily': 'Arial'},
-                            'fontSize': {'magnitude': 14, 'unit': 'PT'},
-                            'bold': True
-                        },
-                        'fields': 'weightedFontFamily,fontSize,bold'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'paragraphStyle': {
-                            'alignment': 'CENTER',
-                            'lineSpacing': 150,
-                            'spaceBelow': {'magnitude': 12, 'unit': 'PT'}
-                        },
-                        'fields': 'alignment,lineSpacing,spaceBelow'
-                    }
-                })
-                is_primeiro_paragrafo = False
-                continue
+        p_text = ""
+        for el in item.get('paragraph', {}).get('elements', []):
+            if 'textRun' in el:
+                p_text += el.get('textRun', {}).get('content', '')
+        
+        p_text_clean = p_text.strip()
 
-            is_primeiro_paragrafo = False
-
-            # --- B. SEÇÕES E TÍTULOS (HEADING 1, HEADING 2 ou Numeração 1., 2.) ---
-            if 'HEADING' in heading_type or (p_text_clean and p_text_clean[0].isdigit() and '.' in p_text_clean[:4]):
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'textStyle': {
-                            'weightedFontFamily': {'fontFamily': 'Arial'},
-                            'fontSize': {'magnitude': 12, 'unit': 'PT'},
-                            'bold': True
-                        },
-                        'fields': 'weightedFontFamily,fontSize,bold'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'paragraphStyle': {
-                            'alignment': 'START', # Alinhado à esquerda
-                            'lineSpacing': 150,
-                            'spaceAbove': {'magnitude': 12, 'unit': 'PT'},
-                            'spaceBelow': {'magnitude': 6, 'unit': 'PT'},
-                            'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}
-                        },
-                        'fields': 'alignment,lineSpacing,spaceAbove,spaceBelow,indentFirstLine'
-                    }
-                })
-                continue
-
-            # --- C. RESUMO / ABSTRACT / PALAVRAS-CHAVE ---
-            if p_text_clean.lower().startswith("resumo") or p_text_clean.lower().startswith("abstract") or p_text_clean.lower().startswith("palavras-chave"):
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'textStyle': {
-                            'weightedFontFamily': {'fontFamily': 'Arial'},
-                            'fontSize': {'magnitude': 10, 'unit': 'PT'} # Fonte menor (10pt)
-                        },
-                        'fields': 'weightedFontFamily,fontSize'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'paragraphStyle': {
-                            'alignment': 'JUSTIFIED',
-                            'lineSpacing': 100, # Espaçamento simples (1.0)
-                            'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}, # Sem recuo na 1ª linha
-                            'spaceBelow': {'magnitude': 6, 'unit': 'PT'}
-                        },
-                        'fields': 'alignment,lineSpacing,indentFirstLine,spaceBelow'
-                    }
-                })
-                continue
-
-            # --- D. CITAÇÕES LONGAS (Mais de 3 linhas / Bloco Recuado) ---
-            if len(p_text_clean) > 200 and ("\"" in p_text_clean or "segundo" in p_text_clean.lower() or "(" in p_text_clean):
-                # Aplicar recuo de citação longa (4 cm da margem esquerda)
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'textStyle': {
-                            'weightedFontFamily': {'fontFamily': 'Arial'},
-                            'fontSize': {'magnitude': 10, 'unit': 'PT'}
-                        },
-                        'fields': 'weightedFontFamily,fontSize'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': start_index, 'endIndex': end_index},
-                        'paragraphStyle': {
-                            'alignment': 'JUSTIFIED',
-                            'lineSpacing': 100,
-                            'indentStart': {'magnitude': 4 * 28.35, 'unit': 'PT'}, # Recuo 4cm
-                            'indentFirstLine': {'magnitude': 0, 'unit': 'PT'},
-                            'spaceBelow': {'magnitude': 6, 'unit': 'PT'}
-                        },
-                        'fields': 'alignment,lineSpacing,indentStart,indentFirstLine,spaceBelow'
-                    }
-                })
-                continue
-
-            # --- E. PARÁGRAFO PADRÃO DO CORPO DO ARTIGO ---
-            requests.append({
+        # A. TÍTULO PRINCIPAL (14pt, Negrito, Centralizado)
+        if p_text_clean == titulo:
+            style_requests.append({
                 'updateTextStyle': {
                     'range': {'startIndex': start_index, 'endIndex': end_index},
-                    'textStyle': {
-                        'weightedFontFamily': {'fontFamily': 'Arial'},
-                        'fontSize': {'magnitude': 12, 'unit': 'PT'}
-                    },
-                    'fields': 'weightedFontFamily,fontSize'
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 14, 'unit': 'PT'}, 'bold': True},
+                    'fields': 'weightedFontFamily,fontSize,bold'
                 }
             })
-            requests.append({
+            style_requests.append({
                 'updateParagraphStyle': {
                     'range': {'startIndex': start_index, 'endIndex': end_index},
-                    'paragraphStyle': {
-                        'alignment': 'JUSTIFIED',
-                        'lineSpacing': 150, # Espaçamento 1,5
-                        'indentFirstLine': {'magnitude': 1.25 * 28.35, 'unit': 'PT'}, # Recuo ABNT 1,25cm
-                        'spaceBelow': {'magnitude': 0, 'unit': 'PT'}
-                    },
+                    'paragraphStyle': {'alignment': 'CENTER', 'lineSpacing': 150, 'spaceBelow': {'magnitude': 12, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,spaceBelow'
+                }
+            })
+
+        # B. AUTORES (11pt, Itálico, Centralizado)
+        elif p_text_clean == autores:
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 11, 'unit': 'PT'}, 'italic': True},
+                    'fields': 'weightedFontFamily,fontSize,italic'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'CENTER', 'lineSpacing': 150, 'spaceBelow': {'magnitude': 18, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,spaceBelow'
+                }
+            })
+
+        # C. PALAVRAS-CHAVE (12pt, Sem recuo na 1ª linha)
+        elif p_text_clean.startswith("PALAVRAS-CHAVE"):
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 12, 'unit': 'PT'}, 'bold': True},
+                    'fields': 'weightedFontFamily,fontSize,bold'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'JUSTIFIED', 'lineSpacing': 150, 'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}, 'spaceBelow': {'magnitude': 12, 'unit': 'PT'}},
                     'fields': 'alignment,lineSpacing,indentFirstLine,spaceBelow'
                 }
             })
 
-    if requests:
-        docs_service.documents().batchUpdate(
-            documentId=document_id,
-            body={'requests': requests}
-        ).execute()
-        print(" -> Estrutura e estilos visuais de Artigo Científico ABNT aplicados com sucesso!")
+        # D. TÍTULOS DE SEÇÃO E SUBSEÇÃO NUMERADOS (1. RESUMO, 2. INTRODUÇÃO, etc.)
+        elif p_text_clean and (p_text_clean[0].isdigit() or p_text_clean.startswith("REFERÊNCIAS")):
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 12, 'unit': 'PT'}, 'bold': True},
+                    'fields': 'weightedFontFamily,fontSize,bold'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'START', 'lineSpacing': 150, 'spaceAbove': {'magnitude': 12, 'unit': 'PT'}, 'spaceBelow': {'magnitude': 6, 'unit': 'PT'}, 'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,spaceAbove,spaceBelow,indentFirstLine'
+                }
+            })
 
-def executar_agente_abnt(docs_service, document_id: str):
-    """Lê o documento, consulta o Gemini e formata o layout."""
-    print("\n[AGENTE ABNT] Lendo documento...")
-    doc = docs_service.documents().get(documentId=document_id).execute()
-    
-    texto_plano = ""
-    for item in doc.get('body').get('content', []):
-        if 'paragraph' in item:
-            for element in item.get('paragraph').get('elements', []):
-                if 'textRun' in element:
-                    texto_plano += element.get('textRun').get('content')
+        # E. CITAÇÃO LONGA (+3 linhas: Recuo de 4cm, 10pt, Espaçamento simples)
+        elif len(p_text_clean) > 180 and ("\"" in p_text_clean or "p." in p_text_clean or "(" in p_text_clean):
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 10, 'unit': 'PT'}},
+                    'fields': 'weightedFontFamily,fontSize'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'JUSTIFIED', 'lineSpacing': 100, 'indentStart': {'magnitude': 4 * 28.35, 'unit': 'PT'}, 'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}, 'spaceBelow': {'magnitude': 6, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,indentStart,indentFirstLine,spaceBelow'
+                }
+            })
 
-    if texto_plano.strip():
-        print("[AGENTE ABNT] Analisando citações e referências com o Gemini...")
-        texto_revisado = revisar_texto_com_gemini(texto_plano)
-        print("[AGENTE ABNT] Texto analisado e revisado pela IA!")
+        # F. REFERÊNCIAS BIBLIOGRÁFICAS [1], [2] (11pt)
+        elif p_text_clean.startswith("["):
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 11, 'unit': 'PT'}},
+                    'fields': 'weightedFontFamily,fontSize'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'START', 'lineSpacing': 100, 'indentFirstLine': {'magnitude': 0, 'unit': 'PT'}, 'spaceBelow': {'magnitude': 6, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,indentFirstLine,spaceBelow'
+                }
+            })
 
-    print("[AGENTE ABNT] Ajustando margens, fonte e recuos...")
-    aplicar_formatacao_abnt_docs(docs_service, document_id)
+        # G. PARÁGRAFO PADRÃO E TEXTO DO RESUMO
+        # (12pt, Justificado, Espaçamento 1,5, Recuo na 1ª linha 1,25cm)
+        else:
+            style_requests.append({
+                'updateTextStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'textStyle': {'weightedFontFamily': {'fontFamily': 'Arial'}, 'fontSize': {'magnitude': 12, 'unit': 'PT'}},
+                    'fields': 'weightedFontFamily,fontSize'
+                }
+            })
+            style_requests.append({
+                'updateParagraphStyle': {
+                    'range': {'startIndex': start_index, 'endIndex': end_index},
+                    'paragraphStyle': {'alignment': 'JUSTIFIED', 'lineSpacing': 150, 'indentFirstLine': {'magnitude': 1.25 * 28.35, 'unit': 'PT'}, 'spaceBelow': {'magnitude': 0, 'unit': 'PT'}},
+                    'fields': 'alignment,lineSpacing,indentFirstLine,spaceBelow'
+                }
+            })
+
+    if style_requests:
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': style_requests}).execute()
+        print(" -> [SUCESSO] Documento formatado com Resumo único e alinhado!")
 
 
-def monitorar_documento(document_id: str, intervalo_segundos: int = 10):
-    """Monitora alterações no documento via API do Google Drive."""
+def monitorar_documento(document_id: str, intervalo_segundos: int = 15):
+    """Monitora alterações no documento."""
     docs_service, drive_service = autenticar_google_workspace()
     
-    print(f"=== Monitoramento Iniciado ===")
-    print(f"Acompanhando alterações no documento ID: {document_id}")
-    print("Pressione Ctrl+C para encerrar.\n")
+    print(f"\n=======================================================")
+    print(f" AGENTE ABNT AUTOMÁTICO - MONITORAMENTO ATIVO")
+    print(f" Monitorando Documento ID: {document_id}")
+    print(f" Pressione Ctrl+C para encerrar.")
+    print(f"=======================================================\n")
 
-    ultima_modificacao = None
+    ultimo_hash = None
 
     try:
         while True:
-            file_metadata = drive_service.files().get(
-                fileId=document_id, 
-                fields='modifiedTime'
-            ).execute()
+            doc = docs_service.documents().get(documentId=document_id).execute()
             
-            modificacao_atual = file_metadata.get('modifiedTime')
+            texto_rascunho = ""
+            for item in doc.get('body', {}).get('content', []):
+                if 'paragraph' in item:
+                    for element in item.get('paragraph', {}).get('elements', []):
+                        if 'textRun' in element:
+                            texto_rascunho += element.get('textRun', {}).get('content', '')
 
-            if ultima_modificacao is None:
-                ultima_modificacao = modificacao_atual
-                print("Executando a primeira formatação...")
-                executar_agente_abnt(docs_service, document_id)
-            elif modificacao_atual != ultima_modificacao:
-                print(f"\n[ALERTA] Alteração detectada! Data/Hora: {modificacao_atual}")
-                ultima_modificacao = modificacao_atual
-                executar_agente_abnt(docs_service, document_id)
+            hash_atual = calcular_hash_texto(texto_rascunho)
+
+            if ultimo_hash is None:
+                ultimo_hash = hash_atual
+                if texto_rascunho.strip():
+                    print("[WATCHER] Executando primeira análise do documento...")
+                    artigo_json = processar_texto_com_ia(texto_rascunho)
+                    renderizar_layout_abnt_no_docs(docs_service, document_id, artigo_json)
+                    
+                    doc_modificado = docs_service.documents().get(documentId=document_id).execute()
+                    txt_mod = "".join([el.get('textRun', {}).get('content', '') for item in doc_modificado.get('body', {}).get('content', []) if 'paragraph' in item for el in item.get('paragraph', {}).get('elements', []) if 'textRun' in el])
+                    ultimo_hash = calcular_hash_texto(txt_mod)
+
+            elif hash_atual != ultimo_hash:
+                print("\n[EVENTO] Alteração de texto detectada no documento!")
+                artigo_json = processar_texto_com_ia(texto_rascunho)
+                renderizar_layout_abnt_no_docs(docs_service, document_id, artigo_json)
+                
+                doc_modificado = docs_service.documents().get(documentId=document_id).execute()
+                txt_mod = "".join([el.get('textRun', {}).get('content', '') for item in doc_modificado.get('body', {}).get('content', []) if 'paragraph' in item for el in item.get('paragraph', {}).get('elements', []) if 'textRun' in el])
+                ultimo_hash = calcular_hash_texto(txt_mod)
 
             time.sleep(intervalo_segundos)
     except KeyboardInterrupt:
-        print("\nMonitoramento encerrado pelo usuário.")
+        print("\n[SISTEMA] Monitoramento encerrado com sucesso.")
 
 
 if __name__ == "__main__":
-    # Cole aqui o ID do seu Google Docs (encontrado na URL do seu documento)
-    # Exemplo: https://docs.google.com/document/d/SEU_ID_AQUI/edit
-    DOCUMENT_ID = "ID_SEU_DOCUMENTO"
-    
-    monitorar_documento(DOCUMENT_ID, intervalo_segundos=10)
+    DOCUMENT_ID = "1RvnMyg-5O3i4s_iIgmwN61aHuesJjyV0a_0bFIUot0E"
+    monitorar_documento(DOCUMENT_ID, intervalo_segundos=15)
