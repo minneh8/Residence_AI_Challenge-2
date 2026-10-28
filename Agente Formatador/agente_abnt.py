@@ -2,23 +2,30 @@ import os
 import time
 import json
 import hashlib
-from google import genai
+from openai import OpenAI
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+# Escopos oficiais para o Google Workspace
 SCOPES = [
     'https://www.googleapis.com/auth/documents',
     'https://www.googleapis.com/auth/drive'
 ]
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+# Chave API da Groq Cloud (Substitua pela sua chave gsk_...)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+# Inicializa o cliente apontando para os servidores ultra-rápidos da Groq
+client_groq = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=GROQ_API_KEY
+)
 
 
 def autenticar_google_workspace():
-    """Autentica o usuário e retorna os serviços de API do Google Docs e Drive."""
+    """Autentica o usuário no Google Workspace com tratamento de escopos."""
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     credentials_path = os.path.join(BASE_DIR, 'credentials.json')
     token_path = os.path.join(BASE_DIR, 'token.json')
@@ -35,7 +42,7 @@ def autenticar_google_workspace():
             try:
                 creds.refresh(Request())
             except Exception as e:
-                print(f"[AUTENTICAÇÃO] Renovação falhou ({e}). Gerando novo acesso...")
+                print(f"[AUTENTICAÇÃO] Renovação de token falhou ({e}). Reautenticando...")
                 if os.path.exists(token_path):
                     os.remove(token_path)
                 creds = None
@@ -61,82 +68,78 @@ def calcular_hash_texto(texto: str) -> str:
 
 
 def processar_texto_com_ia(texto_rascunho: str) -> dict:
-    """Submete o rascunho para a API do Gemini estruturando a resposta em JSON sem duplicar o resumo."""
-    prompt = f"""
+    """
+    Submete o rascunho para a API da Groq
+    com retorno estritamente configurado em formato JSON.
+    """
+    prompt_system = """
 Você é um Revisor Acadêmico Sênior especializado em Artigos Científicos.
 Sua tarefa é analisar o rascunho fornecido, reescrever corrigindo TODA a ortografia e gramática, e estruturar a resposta ESTRITAMENTE como um objeto JSON.
 
 O JSON deve seguir a seguinte estrutura exata:
-{{
+{
   "titulo_principal": "TÍTULO DO ARTIGO EM CAIXA ALTA E CORRIGIDO",
   "autores": "Nome do Autor ou Autores",
   "resumo": "Texto completo do resumo corrigido sem erros de acentuação.",
   "palavras_chave": "PALAVRAS-CHAVE: termo 1. termo 2. termo 3.",
   "elementos": [
-    {{
+    {
       "tipo": "TITULO_SECAO" ou "SUBTITULO_SECAO" ou "PARAGRAFO" ou "CITACAO_LONGA" ou "REFERENCIA",
       "texto": "Texto do parágrafo ou título corrigido ortograficamente",
       "numeracao": "2." ou "2.1" ou "[1]" ou null
-    }}
+    }
   ]
-}}
+}
 
 REGRAS OBRIGATÓRIAS DE ESTRUTURAÇÃO:
 1. O texto do resumo DEVE ficar no campo "resumo" do JSON. NÃO inclua o resumo nem o título "1. RESUMO" dentro do array "elementos".
 2. As seções dentro de "elementos" devem começar A PARTIR DA INTRODUÇÃO numeradas normalmente: 2. INTRODUÇÃO, 3. DESENVOLVIMENTO, 3.1 Subtítulo, 4. CONCLUSÃO.
 3. Na seção de REFERÊNCIAS ao final, numere cada item no formato [1], [2], [3]... em ordem alfabética.
 4. Corrija 100% dos erros de grafia, pontuação e acentuação de todo o texto.
-5. Responda APENAS o objeto JSON válido.
-
-Texto Rascunho Original:
-{texto_rascunho}
 """
 
+    # Nomes dos modelos ativos e suportados atualmente na Groq Cloud
     modelos = [
-        "gemini-3.1-flash-lite",
-        "gemini-flash-latest"
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b"
     ]
 
     for model_name in modelos:
         for tentativa in range(1, 4):
             try:
-                print(f"[AGENTE ABNT] Processando com {model_name} (tentativa {tentativa})...")
-                response = client_gemini.models.generate_content(
+                print(f"[AGENTE ABNT] Processando com modelo {model_name} (tentativa {tentativa})...")
+                
+                response = client_groq.chat.completions.create(
                     model=model_name,
-                    contents=prompt
+                    messages=[
+                        {"role": "system", "content": prompt_system},
+                        {"role": "user", "content": f"Texto Rascunho Original:\n{texto_rascunho}"}
+                    ],
+                    response_format={"type": "json_object"},  # Exige JSON nativo da API
+                    temperature=0.1
                 )
                 
-                raw_text = response.text.strip()
-                
-                if raw_text.startswith("```json"):
-                    raw_text = raw_text[7:]
-                if raw_text.startswith("```"):
-                    raw_text = raw_text[3:]
-                if raw_text.endswith("```"):
-                    raw_text = raw_text[:-3]
-
-                data = json.loads(raw_text.strip())
+                raw_text = response.choices[0].message.content.strip()
+                data = json.loads(raw_text)
                 print(f"[AGENTE ABNT] Sucesso no processamento com {model_name}!")
                 return data
 
             except Exception as e:
                 err_msg = str(e)
-                if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                    tempo_espera = tentativa * 3
-                    print(f"[AGENTE ABNT] Modelo {model_name} ocupado (503). Aguardando {tempo_espera}s...")
-                    time.sleep(tempo_espera)
-                elif "404" in err_msg or "NOT_FOUND" in err_msg:
-                    print(f"[AGENTE ABNT] Modelo {model_name} indisponível (404). Tentando próximo...")
+                print(f"[AGENTE ABNT] Aviso com modelo {model_name}: {err_msg}")
+                if "404" in err_msg:
+                    # Se o modelo não existe, pula direto para o próximo da lista
                     break
-                else:
-                    print(f"[AGENTE ABNT] Erro ao processar com {model_name}: {e}")
-                    time.sleep(1)
+                time.sleep(2)
 
-    raise RuntimeError("Não foi possível processar o rascunho com os modelos Gemini disponíveis.")
+    raise RuntimeError("Não foi possível processar o rascunho com os modelos da Groq disponíveis.")
 
 
 def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict):
-    """Atualiza o conteúdo no Google Docs sem duplicação de seções."""
+    """Atualiza o conteúdo no Google Docs sem duplicação de seções ou numeração."""
     print("[AGENTE ABNT] Reconstruindo texto no Google Docs...")
     
     doc = docs_service.documents().get(documentId=document_id).execute()
@@ -170,12 +173,16 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
         num = el.get("numeracao")
         txt = el.get("texto", "").strip()
 
-        # Filtra elementos para evitar qualquer duplicação do resumo no loop
+        # Evita duplicação do resumo no loop
         if "resumo" in txt.lower() and (num in ["1.", "1"] or not num):
             continue
 
         if tipo in ["TITULO_SECAO", "SUBTITULO_SECAO", "REFERENCIA"] and num:
-            texto_gerado += f"{num} {txt}\n"
+            # --- CORREÇÃO AQUI: Se o texto JÁ começar com o número, usa só o texto para não duplicar ---
+            if txt.startswith(num):
+                texto_gerado += f"{txt}\n"
+            else:
+                texto_gerado += f"{num} {txt}\n"
         else:
             texto_gerado += f"{txt}\n"
 
@@ -202,7 +209,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
     docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
 
     # 3. Estilização Visual
-    print("[AGENTE ABNT] Aplicando estilos visuais...")
+    print("[AGENTE ABNT] Aplicando estilos visuais ABNT...")
     doc_atualizado = docs_service.documents().get(documentId=document_id).execute()
     content = doc_atualizado.get('body', {}).get('content', [])
 
@@ -225,7 +232,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
         
         p_text_clean = p_text.strip()
 
-        # A. TÍTULO PRINCIPAL (14pt, Negrito, Centralizado)
+        # A. TÍTULO PRINCIPAL
         if p_text_clean == titulo:
             style_requests.append({
                 'updateTextStyle': {
@@ -242,7 +249,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # B. AUTORES (11pt, Itálico, Centralizado)
+        # B. AUTORES
         elif p_text_clean == autores:
             style_requests.append({
                 'updateTextStyle': {
@@ -259,7 +266,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # C. PALAVRAS-CHAVE (12pt, Sem recuo na 1ª linha)
+        # C. PALAVRAS-CHAVE
         elif p_text_clean.startswith("PALAVRAS-CHAVE"):
             style_requests.append({
                 'updateTextStyle': {
@@ -276,7 +283,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # D. TÍTULOS DE SEÇÃO E SUBSEÇÃO NUMERADOS (1. RESUMO, 2. INTRODUÇÃO, etc.)
+        # D. TÍTULOS NUMERADOS (1. RESUMO, 2. INTRODUÇÃO, etc.)
         elif p_text_clean and (p_text_clean[0].isdigit() or p_text_clean.startswith("REFERÊNCIAS")):
             style_requests.append({
                 'updateTextStyle': {
@@ -293,7 +300,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # E. CITAÇÃO LONGA (+3 linhas: Recuo de 4cm, 10pt, Espaçamento simples)
+        # E. CITAÇÃO LONGA (+3 linhas)
         elif len(p_text_clean) > 180 and ("\"" in p_text_clean or "p." in p_text_clean or "(" in p_text_clean):
             style_requests.append({
                 'updateTextStyle': {
@@ -310,7 +317,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # F. REFERÊNCIAS BIBLIOGRÁFICAS [1], [2] (11pt)
+        # F. REFERÊNCIAS BIBLIOGRÁFICAS [1], [2]
         elif p_text_clean.startswith("["):
             style_requests.append({
                 'updateTextStyle': {
@@ -327,8 +334,7 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
                 }
             })
 
-        # G. PARÁGRAFO PADRÃO E TEXTO DO RESUMO
-        # (12pt, Justificado, Espaçamento 1,5, Recuo na 1ª linha 1,25cm)
+        # G. PARÁGRAFO PADRÃO DO CORPO
         else:
             style_requests.append({
                 'updateTextStyle': {
@@ -347,15 +353,14 @@ def renderizar_layout_abnt_no_docs(docs_service, document_id: str, artigo: dict)
 
     if style_requests:
         docs_service.documents().batchUpdate(documentId=document_id, body={'requests': style_requests}).execute()
-        print(" -> [SUCESSO] Documento formatado com Resumo único e alinhado!")
-
+        print(" -> [SUCESSO] Documento formatado!")
 
 def monitorar_documento(document_id: str, intervalo_segundos: int = 15):
     """Monitora alterações no documento."""
     docs_service, drive_service = autenticar_google_workspace()
     
     print(f"\n=======================================================")
-    print(f" AGENTE ABNT AUTOMÁTICO - MONITORAMENTO ATIVO")
+    print(f" AGENTE ABNT AUTOMÁTICO - OPERANDO VIA GROQ ")
     print(f" Monitorando Documento ID: {document_id}")
     print(f" Pressione Ctrl+C para encerrar.")
     print(f"=======================================================\n")
@@ -401,5 +406,5 @@ def monitorar_documento(document_id: str, intervalo_segundos: int = 15):
 
 
 if __name__ == "__main__":
-    DOCUMENT_ID = "1RvnMyg-5O3i4s_iIgmwN61aHuesJjyV0a_0bFIUot0E"
+    DOCUMENT_ID = "1pOVDFCLk67XBK9wheuYHvX1M04Q4x0SVe2mTfg4XCiE"
     monitorar_documento(DOCUMENT_ID, intervalo_segundos=15)
