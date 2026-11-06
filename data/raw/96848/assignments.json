@@ -1,0 +1,38 @@
+[
+  {
+    "id": 277006,
+    "course_id": 96848,
+    "title": "Scrum em projetos grandes",
+    "description": "<p>Para este trabalho:</p>\n<p class=\"isSelectedEnd\"><span>Completar o&nbsp;</span><strong><span>Product Backlog</span></strong><span>&nbsp;do sistema&nbsp;</span><strong><span>Gestão de Pedidos</span></strong><span>&nbsp;e da&nbsp;</span><strong><span>saga Gestão de Créditos</span></strong><span>.</span></p>\n<p class=\"isSelectedEnd\"><span>Em uma&nbsp;</span><strong><span>outra aba do Excel</span></strong><span>, elaborar o&nbsp;</span><strong><span>Planejamento dos Sprints (Sprint Backlog)</span></strong><span>, considerando:</span></p>\n<ul data-spread=\"false\">\n<li><strong><span>Épico 2:</span></strong><span>&nbsp;planejamento do Sprint para um time;</span></li>\n<li><strong><span>Épico 3:</span></strong><span>&nbsp;planejamento do Sprint para outro time.</span></li>\n</ul>\n<p><span>Indicar a velocidade de cada time.</span></p>\n<p><img src=\"https://puc-campinas.instructure.com/courses/96848/files/4263785/preview?verifier=c00288bf-4ddb-46a9-82fd-ea9c531a7989\" alt=\"image.png\" data-api-endpoint=\"https://puc-campinas.instructure.com/api/v1/courses/96848/files/4263785\" data-api-returntype=\"File\" loading=\"lazy\"></p>\n<p>&nbsp;</p>\n<p>&nbsp;</p>\n<p>&nbsp;</p>\n<p>&nbsp;</p>\n<p>&nbsp;</p>",
+    "due_at": "2026-09-23T02:59:59Z",
+    "points_possible": 10.0,
+    "submitted": false
+  },
+  {
+    "id": 281544,
+    "course_id": 96848,
+    "title": "Design Thinking",
+    "description": "<p>Anexar o trabalho: Persona. Solução descrição. Jornada do usuário, Protótipos e documento da avaliação do outro grupo</p>",
+    "due_at": "2026-10-03T02:59:59Z",
+    "points_possible": 10.0,
+    "submitted": false
+  },
+  {
+    "id": 283584,
+    "course_id": 96848,
+    "title": "SEMINÁRIO DOS ESTILOS DE ARQUITETURA data: 20-10",
+    "description": "<p>Os alunos devem entrar no grupo correspondente da apresentação.</p>\n<p>Alunos que não tem grupo escolher aquele grupo vazio.</p>\n<p>Tem que apresentar a arquitetura, mostrar a figura, vantagens e desvantagens.</p>\n<p>Todos os alunos do grupo tem que saber apresentar.</p>\n<p>A professora irá indicar quem do grupo vai apresentar.</p>",
+    "due_at": "2026-10-21T02:59:59Z",
+    "points_possible": 10.0,
+    "submitted": false
+  },
+  {
+    "id": 286713,
+    "course_id": 96848,
+    "title": "Tarefas valendo presença dia 3-11",
+    "description": "<p>Encaminhar num arquivo Word exemplo de código e testes (usando unittest python) com as seguintes técnicas de teste:</p>\n<p>1. Teste de Condição. o programa tem uma condição e ela é testada.</p>\n<p>2. Teste de ciclo aninhado: o ciclo tem dois ciclos um dentro de outro que são testados.</p>\n<p>3. Teste de ciclo concatenados independentes um do outro.</p>\n<p>4. Teste de ciclo concatenados dependentes um do outro. Isto é, o ciclo posterior usa a variável do ciclo anterior.</p>\n<p>5. Fluxo de dados: teste das linhas de código onde tem uma definição de variável e onde ela é usada (calculo ou condicional).</p>",
+    "due_at": "2026-11-04T02:59:59Z",
+    "points_possible": 0.0,
+    "submitted": false
+  }
+]
