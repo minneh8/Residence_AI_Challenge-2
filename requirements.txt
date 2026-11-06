@@ -1,0 +1,21 @@
+# --- Framework de Multiagentes e Orquestração ---
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-community>=0.3.0
+
+# --- Validação de Dados e Tipagem ---
+pydantic>=2.8.0
+
+# --- Integração com Canvas LMS e Requisições ---
+canvasapi>=3.3.0
+requests>=2.31.0
+httpx>=0.27.0
+
+# --- Gerenciamento de Variáveis de Ambiente ---
+python-dotenv>=1.0.1
+
+# --- Processamento de Documentos e PDFs (Suporte a RAG) ---
+
+
+# --- Banco de Dados Vetorial (Preparação para RAG) ---

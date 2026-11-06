@@ -1,23 +1,31 @@
-import os
-from dotenv import load_dotenv
-from canvasapi import Canvas
+# src/agente_canvas/node.py
+from typing import Dict, Any
+from src.state import GlauxState
+from service import CanvasService
 
-# Carrega as variáveis de ambiente do .env
-load_dotenv()
+def canvas_agent_node(state: GlauxState) -> Dict[str, Any]:
+    """
+    Nó do LangGraph: Mapeia matérias, faz download de PDFs e extrai tarefas e avisos.
+    """
+    service = CanvasService(api_key=state.canvas_api_key)
 
-API_URL = os.getenv("CANVAS_API_URL")
-API_KEY = os.getenv("CANVAS_API_KEY")
+    courses = service.get_user_courses()
+    downloaded_files = service.download_course_files()
+    
+    all_assignments = []
+    all_announcements = []
 
-# Inicializa o Canvas
-canvas = Canvas(API_URL, API_KEY)
+    for course in courses:
+        assignments = service.get_course_assignments(course)
+        announcements = service.get_course_announcements(course)
+        
+        all_assignments.extend([a.model_dump() for a in assignments])
+        all_announcements.extend([ann.model_dump() for ann in announcements])
 
-# Teste simples: pega os dados do próprio usuário
-user = canvas.get_current_user()
-print(f"✅ Conectado com sucesso como: {user.name}")
-
-# Listar os cursos ativos
-print("\nDisciplinas ativas:")
-courses = user.get_courses(enrollment_state="active")
-for course in courses:
-    if hasattr(course, "name"):
-        print(f"- [{course.id}] {course.name}")
+    # Retorna todas as informações para atualizar o Estado Global do LangGraph
+    return {
+        "courses": [course.model_dump() for course in courses],
+        "downloaded_files": [file_meta.model_dump() for file_meta in downloaded_files],
+        "assignments": all_assignments,
+        "announcements": all_announcements
+    }
