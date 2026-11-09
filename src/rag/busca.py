@@ -5,53 +5,69 @@ Interface pública consumida pelos agentes:
     buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]
 
 Cada item retornado tem as chaves:
-    texto   (str)   conteúdo do trecho
-    arquivo (str)   nome do PDF de origem
-    pagina  (int)   página do PDF (começando em 1)
-    score   (float) relevância; maior = mais relevante
+    texto      (str)   conteúdo do trecho
+    arquivo    (str)   nome do PDF de origem
+    pagina     (int)   primeira página do trecho no PDF (começando em 1)
+    pagina_fim (int)   última página do trecho
+    score      (float) similaridade de cosseno (1 - distância); maior = mais relevante
 
 Os itens vêm ordenados por score decrescente, com no máximo k elementos.
 
-ATENÇÃO: nesta etapa a função retorna DADOS SIMULADOS (mock), apenas para que
-os agentes possam testar a integração. Não há índice, embeddings nem leitura
-de PDFs ainda.
+Busca vetorial pura no ChromaDB (data/chroma/), filtrada por course_id.
+Ainda não há busca híbrida, reranking nem score mínimo: os k mais próximos
+voltam sempre, mesmo quando a pergunta não tem relação com o material.
 """
 
-# --- DADOS SIMULADOS (MOCK) ---------------------------------------------------
-# Remover quando a busca real no índice (data/chroma/) for implementada.
-_TRECHOS_SIMULADOS: list[dict] = [
-    {
-        "texto": "[SIMULADO] Trecho de exemplo 1 retornado pelo RAG.",
-        "arquivo": "exemplo_simulado_aula01.pdf",
-        "pagina": 1,
-        "score": 0.95,
-    },
-    {
-        "texto": "[SIMULADO] Trecho de exemplo 2 retornado pelo RAG.",
-        "arquivo": "exemplo_simulado_aula01.pdf",
-        "pagina": 3,
-        "score": 0.87,
-    },
-    {
-        "texto": "[SIMULADO] Trecho de exemplo 3 retornado pelo RAG.",
-        "arquivo": "exemplo_simulado_aula02.pdf",
-        "pagina": 2,
-        "score": 0.80,
-    },
-    {
-        "texto": "[SIMULADO] Trecho de exemplo 4 retornado pelo RAG.",
-        "arquivo": "exemplo_simulado_aula02.pdf",
-        "pagina": 5,
-        "score": 0.72,
-    },
-    {
-        "texto": "[SIMULADO] Trecho de exemplo 5 retornado pelo RAG.",
-        "arquivo": "exemplo_simulado_aula03.pdf",
-        "pagina": 4,
-        "score": 0.65,
-    },
-]
-# ------------------------------------------------------------------------------
+import logging
+
+from .embeddings import embedding_query
+from .indexacao import obter_colecao
+
+logger = logging.getLogger(__name__)
+
+# PROVISÓRIO: coleção usada por buscar(). rag_j3_s1 = chunks de 3 páginas com
+# 1 de sobreposição. A escolha definitiva depende da avaliação de recuperação
+# (Recall/MRR) entre as configurações, que ainda não foi feita.
+COLECAO_PADRAO = "rag_j3_s1"
+
+
+def _validar(pergunta: str, k: int) -> None:
+    if not isinstance(pergunta, str) or not pergunta.strip():
+        raise ValueError("A pergunta não pode ser vazia.")
+    if k <= 0:
+        raise ValueError("k deve ser maior que zero.")
+
+
+def buscar_na_colecao(pergunta: str, course_id: int, k: int, colecao: str) -> list[dict]:
+    """Como buscar(), mas na coleção indicada. Útil para comparar configurações."""
+    _validar(pergunta, k)
+
+    col = obter_colecao(colecao)
+    indexado = col is not None and col.get(
+        where={"course_id": course_id}, limit=1, include=[])["ids"]
+    if not indexado:
+        logger.warning("Curso %s não está indexado na coleção %s.", course_id, colecao)
+        return []
+
+    resultado = col.query(
+        query_embeddings=[embedding_query(pergunta.strip())],
+        n_results=k,
+        where={"course_id": course_id},
+        include=["documents", "metadatas", "distances"],
+    )
+    trechos = [
+        {
+            "texto": texto,
+            "arquivo": meta["arquivo"],
+            "pagina": meta["pagina"],
+            "pagina_fim": meta["pagina_fim"],
+            "score": 1 - distancia,
+        }
+        for texto, meta, distancia in zip(
+            resultado["documents"][0], resultado["metadatas"][0], resultado["distances"][0])
+    ]
+    trechos.sort(key=lambda t: t["score"], reverse=True)
+    return trechos
 
 
 def buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]:
@@ -63,19 +79,11 @@ def buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]:
         k: quantidade máxima de trechos retornados. Deve ser maior que zero.
 
     Returns:
-        Lista de dicts com as chaves texto, arquivo, pagina e score,
-        ordenada por score decrescente.
+        Lista de dicts com as chaves texto, arquivo, pagina, pagina_fim e
+        score, ordenada por score decrescente. Lista vazia (com aviso no log)
+        se o curso não estiver indexado em COLECAO_PADRAO.
 
     Raises:
         ValueError: se a pergunta for vazia (ou só espaços) ou se k <= 0.
-
-    ATENÇÃO: implementação SIMULADA. Ignora pergunta e course_id e devolve
-    trechos fixos marcados com "[SIMULADO]".
     """
-    if not isinstance(pergunta, str) or not pergunta.strip():
-        raise ValueError("A pergunta não pode ser vazia.")
-    if k <= 0:
-        raise ValueError("k deve ser maior que zero.")
-
-    # MOCK: substituir pela consulta ao índice vetorial do course_id.
-    return [dict(trecho) for trecho in _TRECHOS_SIMULADOS[:k]]
+    return buscar_na_colecao(pergunta, course_id, k, COLECAO_PADRAO)

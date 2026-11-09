@@ -1,9 +1,9 @@
-"""Relatório do chunking dos PDFs de um curso.
+"""Relatório do chunking dos PDFs de alguma materia.
 
 Uso (a partir da raiz do repositório):
     python scripts/testar_chunking.py <course_id> [janela] [sobreposicao]
 
-Mostra totais, páginas descartadas, tamanho dos chunks, chunks por PDF e
+Mostra totais, páginas descartadas, tamanho dos chunks (caracteres e tokens), chunks por PDF e
 3 exemplos curtos. Nada é gravado em disco.
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 # Permite "from src.rag ..." ao rodar o script diretamente.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.rag.chunking import filtrar_paginas, gerar_chunks  # noqa: E402
+from src.rag.chunking import contar_tokens, filtrar_paginas, gerar_chunks  # noqa: E402
 from src.rag.extracao import extrair_curso  # noqa: E402
 
 TAMANHO_EXEMPLO = 300
@@ -33,7 +33,7 @@ def relatorio(course_id: int, janela: int, sobreposicao: int) -> int:
     for motivo, n in Counter(d["motivo"] for d in descartadas).items():
         print(f"    {n:3d} por {motivo}")
     for d in descartadas:
-        print(f"    - {d['arquivo']} p.{d['pagina']} ({d['motivo']})")
+        print(f"    - {d['arquivo']} p.{d['pagina']} ({d['motivo']}: {d['detalhe']})")
     print(f"  chunks:              {len(chunks)}")
     if not chunks:
         return 1
@@ -41,6 +41,13 @@ def relatorio(course_id: int, janela: int, sobreposicao: int) -> int:
     tamanhos = [c["caracteres"] for c in chunks]
     print(f"  caracteres por chunk: mín {min(tamanhos)} | "
           f"média {sum(tamanhos) / len(tamanhos):.0f} | máx {max(tamanhos)}")
+    tokens = [contar_tokens(c["texto"]) for c in chunks]
+    divididos = {c["chunk_id"].split("#")[0] for c in chunks if "#" in c["chunk_id"]}
+    print(f"  tokens por chunk:     mín {min(tokens)} | "
+          f"média {sum(tokens) / len(tokens):.0f} | máx {max(tokens)} "
+          f"| > 512: {sum(t > 512 for t in tokens)}")
+    print(f"  chunks divididos:     {len(divididos)}"
+          + (f" -> {sorted(divididos)}" if divididos else ""))
     print("  chunks por PDF:")
     for arquivo, n in Counter(c["arquivo"] for c in chunks).items():
         print(f"    {arquivo}: {n}")

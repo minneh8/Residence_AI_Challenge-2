@@ -1,1 +1,254 @@
-[]
+[
+  {
+    "id": "q01",
+    "pergunta": "O que diz o critério de falseabilidade de Popper?",
+    "course_id": 93527,
+    "tipo": "termo",
+    "origem": "lista1-q1",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [17]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q02",
+    "pergunta": "Quando uma hipótese pode ser considerada científica?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "lista1-q1",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [17, 36]},
+      {"arquivo": "aula03.pdf", "paginas": [31]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q03",
+    "pergunta": "O que é o método hipotético-dedutivo?",
+    "course_id": 93527,
+    "tipo": "direta",
+    "origem": "relatorio-extracao",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [23]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q04",
+    "pergunta": "Qual a diferença entre hipótese nula e hipótese alternativa?",
+    "course_id": 93527,
+    "tipo": "direta",
+    "origem": "relatorio-extracao",
+    "respostas": [
+      {"arquivo": "aula03.pdf", "paginas": [15]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q07",
+    "pergunta": "Qual a diferença entre um estudo experimental e um estudo observacional?",
+    "course_id": 93527,
+    "tipo": "varias",
+    "origem": "lista1-q3",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [29, 32, 36]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q08",
+    "pergunta": "Qual a diferença entre verificação e validação?",
+    "course_id": 93527,
+    "tipo": "direta",
+    "origem": "lista1-q4",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [11]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q10",
+    "pergunta": "O que são ameaças à validade de um estudo?",
+    "course_id": 93527,
+    "tipo": "termo",
+    "origem": "lista1-q5",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [20, 22]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q12",
+    "pergunta": "Como planejar um experimento para comparar o tempo de resposta de duas bibliotecas?",
+    "course_id": 93527,
+    "tipo": "varias",
+    "origem": "lista1-q7",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [35]},
+      {"arquivo": "aula00.pdf", "paginas": [6]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q13",
+    "pergunta": "O que é uma variável de controle?",
+    "course_id": 93527,
+    "tipo": "termo",
+    "origem": "lista1-q8",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [18]},
+      {"arquivo": "aula03.pdf", "paginas": [23]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q14",
+    "pergunta": "Como evitar que outros fatores interfiram no resultado de um experimento?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "lista1-q8",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [18]},
+      {"arquivo": "aula03.pdf", "paginas": [23]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q15",
+    "pergunta": "Para que serve a aleatorização em um experimento?",
+    "course_id": 93527,
+    "tipo": "direta",
+    "origem": "lista1-q9",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [41]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q16",
+    "pergunta": "Se cada engenheiro roda os testes em um turno e em uma máquina diferentes, como saber se o resultado veio do compilador?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "lista1-q9",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [18, 22, 41]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q17",
+    "pergunta": "Qual medida representa melhor o valor típico quando há valores muito altos?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "lista1-q10",
+    "respostas": [
+      {"arquivo": "aula04.pdf", "paginas": [8, 10]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q24",
+    "pergunta": "Como cozinhar arroz?",
+    "course_id": 93527,
+    "tipo": "fora",
+    "origem": "manual",
+    "respostas": [],
+    "status": "confirmada"
+  },
+  {
+    "id": "q25",
+    "pergunta": "Quem ganhou a Copa do Mundo de 2022?",
+    "course_id": 93527,
+    "tipo": "fora",
+    "origem": "manual",
+    "respostas": [],
+    "status": "confirmada"
+  },
+  {
+    "id": "q26",
+    "pergunta": "Como fazer deploy de uma aplicação no Kubernetes?",
+    "course_id": 93527,
+    "tipo": "fora",
+    "origem": "manual",
+    "respostas": [],
+    "status": "confirmada"
+  },
+  {
+    "id": "q27",
+    "pergunta": "O que é validade de construto?",
+    "course_id": 93527,
+    "tipo": "termo",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [20]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q28",
+    "pergunta": "Quando é melhor fazer um estudo de caso em vez de um experimento?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [28, 29, 32]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q29",
+    "pergunta": "O que é uma variável moderadora?",
+    "course_id": 93527,
+    "tipo": "termo",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula02.pdf", "paginas": [18]},
+      {"arquivo": "aula03.pdf", "paginas": [23]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q30",
+    "pergunta": "Qual a diferença entre a média de uma amostra e a média da população?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula03.pdf", "paginas": [18]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q31",
+    "pergunta": "Se não achei nenhuma prova de que algo existe, posso concluir que não existe?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula03.pdf", "paginas": [19]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q32",
+    "pergunta": "O que meu trabalho precisa ter para ser bem avaliado?",
+    "course_id": 93527,
+    "tipo": "parafrase",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula03.pdf", "paginas": [30]}
+    ],
+    "status": "sugerida"
+  },
+  {
+    "id": "q33",
+    "pergunta": "Quais são as etapas para investigar um problema de forma científica?",
+    "course_id": 93527,
+    "tipo": "varias",
+    "origem": "material",
+    "respostas": [
+      {"arquivo": "aula01.pdf", "paginas": [24, 25, 26]}
+    ],
+    "status": "sugerida"
+  }
+]

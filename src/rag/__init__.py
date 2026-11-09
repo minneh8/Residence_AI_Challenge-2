@@ -18,6 +18,7 @@ Organização dos dados:
 Submódulos:
     extracao   leitura do texto dos PDFs, página a página
     chunking   divisão do texto em trechos
+    embeddings modelo de embeddings (carregado uma vez por processo)
     indexacao  geração de embeddings e gravação no índice
     busca      consulta ao índice (interface pública: buscar)
 """
