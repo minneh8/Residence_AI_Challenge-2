@@ -1,27 +1,27 @@
-# src/agente_canvas/service.py
-import os
-import sys
-import requests
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from canvasapi import Canvas
-import json
-from src.state import CanvasCourse, CanvasFileMetadata, CanvasAssignment, CanvasAnnouncement
 
-# Garante que a raiz do projeto esteja no PYTHONPATH para os imports
+import sys
+from pathlib import Path
+
 root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
-from src.state import CanvasCourse, CanvasFileMetadata
 
+import os
+import json
+import requests
+from typing import List, Dict, Any, Optional
+from canvasapi import Canvas
+
+from src.state import CanvasCourse, CanvasFileMetadata, CanvasAssignment, CanvasAnnouncement
+from converter import PDFToMarkdownConverter
 
 class CanvasService:
     """
     Serviço responsável por interagir diretamente com a API do Canvas LMS.
     """
     def __init__(self, api_url: Optional[str] = None, api_key: Optional[str] = None, base_data_dir: str = "data/raw"):
-        self.api_url = api_url or os.getenv("CANVAS_API_URL", "https://canvas.instructure.com")
+        self.api_url = api_url or os.getenv("CANVAS_API_URL")
         self.api_key = api_key or os.getenv("CANVAS_API_KEY")
         
         if not self.api_key:
@@ -217,7 +217,6 @@ class CanvasService:
 
         return parsed_announcements
 
-
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
@@ -238,12 +237,25 @@ if __name__ == "__main__":
     opcao = input("Digite o número da opção desejada: ").strip()
 
     def processar_materia_completa(curso: CanvasCourse):
-        """Executa a coleta completa (PDFs, Tarefas e Avisos) para uma matéria."""
-        print(f"\n Iniciando processamento completo da matéria: {curso.name} (ID: {curso.id})")
+        """Executa a coleta completa (PDFs, Tarefas, Avisos e Conversão MD) para uma matéria."""
+        print(
+            f"\n Iniciando processamento completo da matéria: {curso.name} (ID: {curso.id})"
+        )
+
+        # 1. Baixa os PDFs para data/raw/{course_id}
         service.download_files_from_course(curso)
+
+        # 2. ⚡ [INTEGRAÇÃO]: Converte os PDFs baixados da matéria para Markdown em data/processed/{course_id}
+        converter = PDFToMarkdownConverter()
+        converter.convert_course_pdfs(curso.id)
+
+        # 3. Puxa tarefas e avisos
         service.get_course_assignments(curso)
         service.get_course_announcements(curso)
-        print(f" Matéria [{curso.name}] processada com sucesso!")
+
+        print(
+            f" Matéria [{curso.name}] processada e convertida com sucesso!"
+        )
 
     match opcao:
         case "0":
