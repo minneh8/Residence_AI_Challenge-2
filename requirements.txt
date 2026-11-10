@@ -5,3 +5,10 @@ transformers==4.46.3
 sentence-transformers==3.3.1
 # 1.x: wheels prontos no Windows (0.6.x exige compilar chroma-hnswlib)
 chromadb==1.0.20
+# Agentes: LLM no Groq pelo cliente openai, chave lida do .env
+openai==3.46.0
+python-dotenv==1.2.4
+# Orquestração dos agentes
+langgraph==1.2.20
+# Testes (python -m pytest tests/)
+pytest==9.2.0
