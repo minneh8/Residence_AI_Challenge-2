@@ -36,4 +36,7 @@ class GlauxState(BaseModel):
     assignments: List[CanvasAssignment] = Field(default_factory=list)
     announcements: List[CanvasAnnouncement] = Field(default_factory=list)
     target_subject: Optional[str] = None
+    target_course_id: Optional[int] = None  # disciplina do tema (id do curso no Canvas)
     generated_questions: List[dict] = Field(default_factory=list)
+    generation_status: Optional[str] = None  # "ok", "sem_material" ou "erro"
+    generation_message: Optional[str] = None  # mensagem para o aluno quando não há questões
