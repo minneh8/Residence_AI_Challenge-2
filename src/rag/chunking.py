@@ -2,7 +2,8 @@
 
 Fluxo de gerar_chunks:
     1. filtrar_paginas: descarta páginas curtas, de título, separadores de
-       seção e overlays do Beamer;
+       seção, páginas de navegação (referências, sumário...) e overlays do
+       Beamer;
     2. preparar_texto: junta linhas quebradas e desfaz hifenização;
     3. agrupa páginas consecutivas do MESMO PDF em janelas;
     4. dividir_texto: divide chunks acima de MAX_TOKENS_CHUNK tokens.
@@ -23,7 +24,8 @@ Saída: um dict por chunk, com
 
 import logging
 import re
-from collections import defaultdict
+import unicodedata
+from collections import Counter, defaultdict
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,30 @@ PREFIXO_PASSAGE = "passage: "
 # Linhas com menos de MIN_PALAVRAS_LINHA_REPETIDA palavras são rótulos ou
 # cabeçalhos ("Conteúdo", "Exercício 1") e não contam como repetidas.
 MIN_PALAVRAS_LINHA_REPETIDA = 4
+
+# Página de navegação: o título (1ª linha depois do cabeçalho de navegação,
+# se houver) é um destes, comparado sem diferenciar maiúsculas nem acentos e
+# aceitando numeração final ("Referências Bibliográficas I", "Sumário 2").
+TITULOS_NAVEGACAO = {
+    "referências",
+    "referências bibliográficas",
+    "próxima aula",
+    "objetivos da aula",
+    "conteúdo",
+    "sumário",
+    "agenda",
+    "bibliografia",
+    "bibliografia básica",
+    "bibliografia complementar",
+}
+
+# Cabeçalho de navegação do Beamer (nomes das seções no topo do slide):
+# linhas entre as MAX_LINHAS_CABECALHO primeiras da página que se repetem no
+# topo de pelo menos FRACAO_CABECALHO das páginas do mesmo PDF (mínimo de
+# MIN_PAGINAS_CABECALHO páginas).
+MAX_LINHAS_CABECALHO = 6
+FRACAO_CABECALHO = 0.5
+MIN_PAGINAS_CABECALHO = 5
 
 # Compostos reais que não devem perder o hífen ao juntar linhas.
 # Comparação sem diferenciar maiúsculas; a grafia original é preservada.
@@ -145,6 +171,48 @@ def _eh_separador(texto: str) -> bool:
     return bool(letras) and all(c.isupper() for c in letras)
 
 
+def _sem_acentos(texto: str) -> str:
+    """Minúsculas, sem acentos e com espaços colapsados."""
+    decomposto = unicodedata.normalize("NFKD", texto.casefold())
+    return _normalizar("".join(c for c in decomposto if not unicodedata.combining(c)))
+
+
+_TITULOS_NAVEGACAO = {_sem_acentos(t) for t in TITULOS_NAVEGACAO}
+_NUMERACAO_FINAL = re.compile(r"\s+(?:\d{1,3}|[ivxlc]{1,6})$")
+
+
+def _primeiras_linhas(texto: str) -> list[str]:
+    return [l.strip() for l in texto.split("\n") if l.strip()][:MAX_LINHAS_CABECALHO]
+
+
+def _cabecalhos_por_arquivo(paginas: list[dict]) -> dict[str, set[str]]:
+    """Linhas normalizadas que formam o cabeçalho de navegação de cada PDF."""
+    contagem: dict[str, Counter] = defaultdict(Counter)
+    total: Counter = Counter()
+    for p in paginas:
+        total[p["arquivo"]] += 1
+        contagem[p["arquivo"]].update({_normalizar(l) for l in _primeiras_linhas(p["texto"])})
+    cabecalhos = {}
+    for arquivo, linhas in contagem.items():
+        minimo = max(MIN_PAGINAS_CABECALHO, FRACAO_CABECALHO * total[arquivo])
+        cabecalhos[arquivo] = {l for l, n in linhas.items() if n >= minimo}
+    return cabecalhos
+
+
+def _titulo(texto: str, cabecalho: set[str]) -> str:
+    """Primeira linha não vazia que não pertence ao cabeçalho de navegação."""
+    linhas = [l.strip() for l in texto.split("\n") if l.strip()]
+    for i, linha in enumerate(linhas):
+        if i >= MAX_LINHAS_CABECALHO or _normalizar(linha) not in cabecalho:
+            return linha
+    return ""
+
+
+def _eh_titulo_navegacao(titulo: str) -> bool:
+    t = _sem_acentos(titulo).rstrip(":")
+    return t in _TITULOS_NAVEGACAO or _NUMERACAO_FINAL.sub("", t) in _TITULOS_NAVEGACAO
+
+
 def _marcar_overlays(paginas: list[dict]) -> dict[int, int]:
     """Encontra overlays do Beamer (\\pause, \\only...) entre páginas mantidas.
 
@@ -178,6 +246,10 @@ def filtrar_paginas(paginas: list[dict]) -> tuple[list[dict], list[dict]]:
         sozinho não descarta a página;
       - "separador": menos de MAX_CARACTERES_SEPARADOR caracteres e todas as
         letras em maiúsculas;
+      - "navegacao": o título da página (1ª linha depois do cabeçalho de
+        navegação do PDF, se houver; ver _cabecalhos_por_arquivo) está em
+        TITULOS_NAVEGACAO, sem diferenciar maiúsculas nem acentos e
+        aceitando numeração final ("Referências Bibliográficas I");
       - "overlay": entre as páginas que sobraram, página igual à seguinte do
         mesmo PDF ou contida nela (ver _marcar_overlays).
 
@@ -199,9 +271,12 @@ def filtrar_paginas(paginas: list[dict]) -> tuple[list[dict], list[dict]]:
     def descarte(p: dict, motivo: str, detalhe: str) -> dict:
         return {"arquivo": p["arquivo"], "pagina": p["pagina"], "motivo": motivo, "detalhe": detalhe}
 
+    cabecalhos = _cabecalhos_por_arquivo(paginas)
+
     candidatas, descartadas = [], []
     for p, linhas in zip(paginas, linhas_por_pagina):
         repetidas = sum(1 for l in linhas if repetida(l))
+        titulo = _titulo(p["texto"], cabecalhos[p["arquivo"]])
         if len(p["texto"]) < MIN_CARACTERES:
             descartadas.append(descarte(p, "curta", f"menos de {MIN_CARACTERES} caracteres"))
         elif linhas and repetidas > len(linhas) / 2:
@@ -211,6 +286,8 @@ def filtrar_paginas(paginas: list[dict]) -> tuple[list[dict], list[dict]]:
             descartadas.append(descarte(
                 p, "separador",
                 f"menos de {MAX_CARACTERES_SEPARADOR} caracteres, tudo em maiúsculas"))
+        elif _eh_titulo_navegacao(titulo):
+            descartadas.append(descarte(p, "navegacao", f"título: {titulo}"))
         else:
             candidatas.append(p)
 
