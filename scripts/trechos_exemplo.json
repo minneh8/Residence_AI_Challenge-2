@@ -1,0 +1,32 @@
+[
+  {
+    "texto": "Overfitting (sobreajuste) acontece quando o modelo aprende os detalhes e o ruído dos dados de treino a ponto de piorar o desempenho em dados novos. O sinal típico é um erro baixo no conjunto de treino e um erro alto no conjunto de validação. Modelos complexos demais para a quantidade de dados disponível são os mais sujeitos a esse problema.",
+    "arquivo": "aula_exemplo_01.pdf",
+    "pagina": 3,
+    "score": 0.92
+  },
+  {
+    "texto": "Underfitting (subajuste) é o problema oposto: o modelo é simples demais para capturar o padrão dos dados e erra muito tanto no treino quanto na validação. Aumentar a complexidade do modelo ou criar atributos mais informativos costuma reduzir o subajuste.",
+    "arquivo": "aula_exemplo_01.pdf",
+    "pagina": 4,
+    "score": 0.85
+  },
+  {
+    "texto": "Na validação cruzada k-fold, os dados são divididos em k partes de tamanho parecido. O modelo é treinado k vezes, cada vez usando uma parte diferente para validação e as outras k-1 partes para treino. A média dos k resultados estima melhor o desempenho em dados novos do que uma única divisão entre treino e teste.",
+    "arquivo": "aula_exemplo_02.pdf",
+    "pagina": 2,
+    "score": 0.78
+  },
+  {
+    "texto": "A regularização reduz o overfitting acrescentando à função de custo uma penalidade sobre o tamanho dos pesos. Na regularização L2 (ridge), a penalidade é a soma dos quadrados dos pesos, o que os encolhe sem zerá-los. Na L1 (lasso), a penalidade é a soma dos valores absolutos, o que pode zerar pesos e funciona como seleção de atributos.",
+    "arquivo": "aula_exemplo_02.pdf",
+    "pagina": 5,
+    "score": 0.71
+  },
+  {
+    "texto": "O erro de generalização pode ser decomposto em viés, variância e ruído irredutível. Viés alto indica um modelo simples demais, associado ao subajuste; variância alta indica um modelo sensível demais aos dados de treino, associada ao sobreajuste. Ajustar a complexidade do modelo é buscar o equilíbrio entre os dois.",
+    "arquivo": "aula_exemplo_03.pdf",
+    "pagina": 1,
+    "score": 0.63
+  }
+]
