@@ -10,9 +10,7 @@ if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
 from canvasapi import Canvas
-from src.agente_canvas.converter import PDFToMarkdownConverter  # 👈 Import absoluto
 from src.state import CanvasCourse
-from canvasapi.exceptions import CanvasException
 
 
 class CanvasService:
@@ -32,53 +30,54 @@ class CanvasService:
             raise ValueError("CANVAS_API_KEY não foi configurada.")
 
         self.canvas = Canvas(self.api_url, self.api_key)
-        self.converter = PDFToMarkdownConverter(
-            raw_dir=self.raw_dir, processed_dir=self.processed_dir
-        )
 
     def get_user_courses(self) -> List[CanvasCourse]:
-        """Busca matérias ativas do usuário, removendo canais institucionais e canceladas."""
-        try:
-            courses = self.canvas.get_courses(enrollment_state="active")
-            valid_courses: List[CanvasCourse] = []
-            seen_course_ids = set()
-            seen_course_names = set()
+        """Busca matérias ativas do usuário, removendo canais institucionais, duplicatas e canceladas."""
+        courses = self.canvas.get_courses(enrollment_state="active")
+        valid_courses: List[CanvasCourse] = []
+        seen_course_ids = set()
+        seen_course_names = set()
 
-            IGNORED_KEYWORDS = [
-                "canal", "atualização", "atualizacao", "conectaref", 
-                "comunidade", "orientações", "orientacoes", "cancelado", "cancelada"
-            ]
+        IGNORED_KEYWORDS = [
+            "canal",
+            "atualização",
+            "atualizacao",
+            "conectaref",
+            "comunidade",
+            "orientações",
+            "orientacoes",
+            "cancelado",
+            "cancelada",
+        ]
 
-            for c in courses:
-                course_name = getattr(c, "name", "").strip()
-                name_lower = course_name.lower()
-                course_id = getattr(c, "id", None)
+        for c in courses:
+            course_name = getattr(c, "name", "").strip()
+            name_lower = course_name.lower()
+            course_id = getattr(c, "id", None)
 
-                if not course_name or not course_id:
-                    continue
+            if not course_name or not course_id:
+                continue
 
-                if any(keyword in name_lower for keyword in IGNORED_KEYWORDS):
-                    continue
+            if any(keyword in name_lower for keyword in IGNORED_KEYWORDS):
+                print(f" [Filtro Canvas] Ignorando canal/cancelada: {course_name}")
+                continue
 
-                if course_id in seen_course_ids or course_name in seen_course_names:
-                    continue
+            if course_id in seen_course_ids or course_name in seen_course_names:
+                print(f" [Filtro Canvas] Ignorando matéria duplicada: {course_name} (ID: {course_id})")
+                continue
 
-                seen_course_ids.add(course_id)
-                seen_course_names.add(course_name)
+            seen_course_ids.add(course_id)
+            seen_course_names.add(course_name)
 
-                valid_courses.append(
-                    CanvasCourse(
-                        id=course_id,
-                        name=course_name,
-                        course_code=getattr(c, "course_code", None),
-                    )
+            valid_courses.append(
+                CanvasCourse(
+                    id=course_id,
+                    name=course_name,
+                    course_code=getattr(c, "course_code", None),
                 )
+            )
 
-            return valid_courses
-
-        except CanvasException as e:
-            print(f" [Erro Canvas API] Falha na autenticação ou conexão com o Canvas: {e}")
-            return []
+        return valid_courses
 
     def fetch_and_save_course_data(self, course_id: int) -> List[str]:
         """Baixa tarefas, avisos e PDFs do curso no Canvas, acionando o conversor para .MD em seguida."""

@@ -30,18 +30,11 @@ def build_glaux_graph():
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
     load_dotenv()
 
     app = build_glaux_graph()
-
-    canvas_key = os.getenv("CANVAS_API_KEY")
-    if not canvas_key:
-        raise ValueError(" CANVAS_API_KEY não encontrada no arquivo .env!")
-
     initial_state = GlauxState(
-        user_id="estudante_glaux",
-        canvas_api_key=canvas_key
+        user_id="estudante_glaux", canvas_api_key=os.getenv("CANVAS_API_KEY")
     )
 
     print(" Executando esteira completa do Glaux...\n")
@@ -71,21 +64,11 @@ if __name__ == "__main__":
         print("------------------------------------------------------------------")
 
     # --------------------------------------------------------------------------
-    #  SALVA O RESULTADO DO TUTOR EM JSON NA PASTA PROCESSED
+    # SALVA O RESULTADO DO TUTOR EM JSON NA PASTA PROCESSED
     # --------------------------------------------------------------------------
     output_path = Path("data/processed/tutor_output.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-
-    clean_output = {
-        "user_id": final_state.get("user_id"),
-        "courses": final_state.get("courses", []),
-        "assignments": final_state.get("assignments", []),
-        "summaries": final_state.get("summaries", []),
-        "downloaded_files": final_state.get("downloaded_files", [])
-    }
-
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(clean_output, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(final_state, f, ensure_ascii=False, indent=2, default=str)
 
-    print(f"\n Saída limpa do Agente Tutor salva em: {output_path}")
+    print(f"\n Saída do Agente Tutor salva em: {output_path}")
