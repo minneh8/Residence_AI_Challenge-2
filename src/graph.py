@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -16,12 +15,8 @@ from langgraph.graph import END, START, StateGraph
 from src.agente_canvas.node import canvas_agent_node
 from src.agente_canvas.service import CanvasAuthError
 from src.agente_tutor.node import tutor_agent_node
+from src.agente_tutor.service import frases_sem_citacao
 from src.state import GlauxState
-
-# Citação no formato [arquivo, p.X-Y] (ou p.X). Usada na auditoria de citações.
-_CITACAO = re.compile(r"\[[^\]]+,\s*p\.\d+")
-# Linha composta apenas pela citação (o LLM costuma quebrá-la em linha própria).
-_SO_CITACAO = re.compile(r"^\[[^\]]+,\s*p\.\d+(?:-\d+)?\]\.?$")
 
 
 def _formatar_fontes(fontes: list) -> str:
@@ -33,26 +28,6 @@ def _formatar_fontes(fontes: list) -> str:
         else:
             partes.append(str(f))
     return ", ".join(partes) if partes else "nenhuma"
-
-
-def _frases_sem_citacao(texto: str) -> list:
-    """Linhas de conteúdo (não títulos) que afirmam algo sem citar a fonte.
-
-    A citação pode estar na própria linha ou na linha seguinte (o LLM costuma
-    colocar o [arquivo, p.X-Y] numa linha à parte); ambos contam como citados.
-    """
-    linhas = [l.strip() for l in (texto or "").splitlines()]
-    sem_citacao = []
-    for i, linha in enumerate(linhas):
-        if len(linha) < 15 or linha.startswith("#") or _SO_CITACAO.match(linha):
-            continue
-        if _CITACAO.search(linha):
-            continue
-        proxima = next((linhas[j] for j in range(i + 1, len(linhas)) if linhas[j]), "")
-        if _CITACAO.search(proxima):
-            continue
-        sem_citacao.append(linha)
-    return sem_citacao
 
 
 def build_glaux_graph():
@@ -124,7 +99,7 @@ def main() -> int:
         print(f" Fontes Utilizadas: {_formatar_fontes(s.get('sources_used', []))}")
         print("--- CONTEÚDO DO RESUMO ---")
         print(s.get("summary_text"))
-        sem_citacao = _frases_sem_citacao(s.get("summary_text", ""))
+        sem_citacao = frases_sem_citacao(s.get("summary_text", ""))
         if sem_citacao:
             print(f"--- ⚠️ FRASES SEM CITAÇÃO ({len(sem_citacao)}) ---")
             for frase in sem_citacao:

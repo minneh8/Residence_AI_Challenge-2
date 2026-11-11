@@ -29,12 +29,40 @@ K_BUSCA = 3
 _TAGS_HTML = re.compile(r"<[^>]+>")
 _ESPACOS = re.compile(r"\s+")
 
+# Citação no formato [arquivo, p.X-Y] (ou p.X). Auditoria de citações.
+_CITACAO = re.compile(r"\[[^\]]+,\s*p\.\d+")
+# Linha composta apenas pela citação (o LLM costuma quebrá-la em linha própria).
+_SO_CITACAO = re.compile(r"^\[[^\]]+,\s*p\.\d+(?:-\d+)?\]\.?$")
+
+# Resposta de recusa quando o material não cobre o ponto: não é reescrita.
+MSG_RECUSA = "O material não cobre este ponto."
+
 
 def _remover_html(texto: Optional[str]) -> str:
     """Remove tags HTML e normaliza espaços (descrições do Canvas vêm em HTML)."""
     if not texto:
         return ""
     return _ESPACOS.sub(" ", html.unescape(_TAGS_HTML.sub(" ", texto))).strip()
+
+
+def frases_sem_citacao(texto: str) -> list:
+    """Linhas de conteúdo (não títulos) que afirmam algo sem citar a fonte.
+
+    A citação pode estar na própria linha ou na linha seguinte (o LLM costuma
+    colocar o [arquivo, p.X-Y] numa linha à parte); ambos contam como citados.
+    """
+    linhas = [l.strip() for l in (texto or "").splitlines()]
+    sem_citacao = []
+    for i, linha in enumerate(linhas):
+        if len(linha) < 15 or linha.startswith("#") or _SO_CITACAO.match(linha):
+            continue
+        if _CITACAO.search(linha):
+            continue
+        proxima = next((linhas[j] for j in range(i + 1, len(linhas)) if linhas[j]), "")
+        if _CITACAO.search(proxima):
+            continue
+        sem_citacao.append(linha)
+    return sem_citacao
 
 
 class TutorService:
@@ -225,12 +253,42 @@ class TutorService:
         ]
 
         response = self._obter_llm().invoke(messages)
+        texto = (response.content or "").strip()
+
+        # Citação inline garantida: se a auditoria achar frases sem citação (e
+        # não for uma recusa), reescreve UMA vez mantendo o mesmo conteúdo.
+        if texto and texto != MSG_RECUSA:
+            faltantes = frases_sem_citacao(texto)
+            if faltantes:
+                print(f" [Tutor] {len(faltantes)} frase(s) sem citação inline; reescrevendo uma vez...")
+                reescrito = (self._reescrever_com_citacao(texto, contexto) or "").strip()
+                if reescrito and len(frases_sem_citacao(reescrito)) <= len(faltantes):
+                    texto = reescrito
+                restantes = frases_sem_citacao(texto)
+                if restantes:
+                    print(f" [Tutor] AVISO: {len(restantes)} frase(s) seguem sem citação após a reescrita.")
 
         return CourseSummary(
             course_id=course_id,
             course_name=course_name,
             topic_title=topic_title,
             key_points=[],
-            summary_text=response.content,
+            summary_text=texto,
             sources_used=fontes,
         )
+
+    def _reescrever_com_citacao(self, resumo: str, contexto: str) -> str:
+        """Reescreve o resumo com a citação ao final de cada frase, sem mudar o conteúdo."""
+        messages = [
+            SystemMessage(content=TUTOR_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    "Reescreva o RESUMO abaixo mantendo EXATAMENTE o mesmo conteúdo — "
+                    "sem acrescentar, remover ou alterar nenhuma informação. A única "
+                    "mudança permitida é garantir que CADA frase termine com a citação "
+                    "[arquivo, p.X-Y] da fonte correspondente, usando apenas as fontes "
+                    f"que aparecem nos TRECHOS.\n\nTRECHOS:\n{contexto}\n\nRESUMO:\n{resumo}"
+                )
+            ),
+        ]
+        return self._obter_llm().invoke(messages).content
