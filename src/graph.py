@@ -1,7 +1,10 @@
 # src/graph.py
+import argparse
 import json
 import os
+import re
 import sys
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -11,8 +14,35 @@ if str(root_dir) not in sys.path:
 
 from langgraph.graph import END, START, StateGraph
 from src.agente_canvas.node import canvas_agent_node
+from src.agente_canvas.service import CanvasAuthError
 from src.agente_tutor.node import tutor_agent_node
 from src.state import GlauxState
+
+# Citação no formato [arquivo, p.X-Y] (ou p.X). Usada na auditoria de citações.
+_CITACAO = re.compile(r"\[[^\]]+,\s*p\.\d+")
+
+
+def _formatar_fontes(fontes: list) -> str:
+    """Formata sources_used (List[Dict]) como "[arquivo, p.X-Y]"."""
+    partes = []
+    for f in fontes:
+        if isinstance(f, dict):
+            partes.append(f"[{f.get('arquivo')}, p.{f.get('pagina')}-{f.get('pagina_fim')}]")
+        else:
+            partes.append(str(f))
+    return ", ".join(partes) if partes else "nenhuma"
+
+
+def _frases_sem_citacao(texto: str) -> list:
+    """Linhas de conteúdo (não títulos) que afirmam algo sem citar a fonte."""
+    sem_citacao = []
+    for linha in (texto or "").splitlines():
+        linha = linha.strip()
+        if len(linha) < 15 or linha.startswith("#"):
+            continue
+        if not _CITACAO.search(linha):
+            sem_citacao.append(linha)
+    return sem_citacao
 
 
 def build_glaux_graph():
@@ -29,26 +59,39 @@ def build_glaux_graph():
     return workflow.compile()
 
 
-if __name__ == "__main__":
-    from dotenv import load_dotenv
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Esteira Glaux: Canvas + RAG + Tutor.")
+    parser.add_argument(
+        "--tema", type=str, default=None,
+        help="consulta única do Tutor (substitui as consultas por tarefa).",
+    )
+    parser.add_argument(
+        "--curso", type=int, default=None,
+        help="id do curso: roda a esteira (Canvas e Tutor) só nesse curso.",
+    )
+    args = parser.parse_args()
+
     load_dotenv()
-
-    app = build_glaux_graph()
-
-    canvas_key = os.getenv("CANVAS_API_KEY")
-    if not canvas_key:
-        raise ValueError(" CANVAS_API_KEY não encontrada no arquivo .env!")
+    sys.stdout.reconfigure(errors="replace")
 
     initial_state = GlauxState(
         user_id="estudante_glaux",
-        canvas_api_key=canvas_key
+        canvas_api_key=os.getenv("CANVAS_API_KEY"),
+        tema=args.tema,
+        curso_alvo=args.curso,
     )
 
     print(" Executando esteira completa do Glaux...\n")
-    final_state = app.invoke(initial_state)
+    inicio = time.perf_counter()
+    app = build_glaux_graph()
+    try:
+        final_state = app.invoke(initial_state)
+    except CanvasAuthError as e:
+        print(f"\n [ERRO] {e}")
+        return 1
 
     # --------------------------------------------------------------------------
-    #  EXIBIÇÃO FORMATADA NO TERMINAL
+    #  CRONOGRAMA DE TAREFAS
     # --------------------------------------------------------------------------
     print("\n================  CRONOGRAMA DE TAREFAS ================")
     assignments = final_state.get("assignments", [])
@@ -59,33 +102,44 @@ if __name__ == "__main__":
         print(f"[{t.get('priority_level')}] {t.get('course_name')} | {t.get('title')}")
         print(f"    {dias_str} | {t.get('action_recommendation')}\n")
 
+    # --------------------------------------------------------------------------
+    #  RESUMOS DAS MATÉRIAS (+ auditoria de citações)
+    # --------------------------------------------------------------------------
     print("\n================  RESUMOS DAS MATÉRIAS ================")
     summaries = final_state.get("summaries", [])
     for summary in summaries:
         s = summary if isinstance(summary, dict) else summary.model_dump()
         print(f"\n Disciplina: {s.get('course_name')}")
         print(f" Título: {s.get('topic_title')}")
-        print(f" Fontes Utilizadas: {', '.join(s.get('sources_used', []))}")
+        print(f" Fontes Utilizadas: {_formatar_fontes(s.get('sources_used', []))}")
         print("--- CONTEÚDO DO RESUMO ---")
         print(s.get("summary_text"))
+        sem_citacao = _frases_sem_citacao(s.get("summary_text", ""))
+        if sem_citacao:
+            print(f"--- ⚠️ FRASES SEM CITAÇÃO ({len(sem_citacao)}) ---")
+            for frase in sem_citacao:
+                print(f"    • {frase}")
         print("------------------------------------------------------------------")
 
     # --------------------------------------------------------------------------
-    #  SALVA O RESULTADO DO TUTOR EM JSON NA PASTA PROCESSED
+    #  SALVA O RESULTADO DO TUTOR EM JSON
     # --------------------------------------------------------------------------
     output_path = Path("data/processed/tutor_output.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-
     clean_output = {
         "user_id": final_state.get("user_id"),
         "courses": final_state.get("courses", []),
         "assignments": final_state.get("assignments", []),
         "summaries": final_state.get("summaries", []),
-        "downloaded_files": final_state.get("downloaded_files", [])
+        "downloaded_files": final_state.get("downloaded_files", []),
     }
-
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(clean_output, f, ensure_ascii=False, indent=2, default=str)
 
-    print(f"\n Saída limpa do Agente Tutor salva em: {output_path}")
+    print(f"\n Saída do Agente Tutor salva em: {output_path}")
+    print(f" Tempo total: {time.perf_counter() - inicio:.1f} s")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
