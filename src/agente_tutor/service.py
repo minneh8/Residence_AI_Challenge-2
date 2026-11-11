@@ -37,6 +37,27 @@ _SO_CITACAO = re.compile(r"^\[[^\]]+,\s*p\.\d+(?:-\d+)?\]\.?$")
 # Resposta de recusa quando o material não cobre o ponto: não é reescrita.
 MSG_RECUSA = "O material não cobre este ponto."
 
+# Mensagem quando o LLM não devolve resumo algum (ex.: consulta genérica).
+MSG_SEM_RESUMO = (
+    "Não foi possível gerar um resumo a partir do material. "
+    "Use --tema para escolher um assunto."
+)
+
+# Limpeza do nome do curso para usar como consulta: remove códigos numéricos
+# (ex.: "218131", "0101-06-26-2s"), rótulos entre parênteses ("(MAT)") e os
+# hifens isolados que sobram. Ex.: "218131 - MÉTODOS ... QUANTITATIVA (MAT)
+# 0101-06-26-2s" -> "MÉTODOS DE COMPUTAÇÃO EXPERIMENTAL E QUANTITATIVA".
+_PARENTESES = re.compile(r"\([^)]*\)")
+_COD_NUMERICO = re.compile(r"\b\d[\d-]*[a-zA-Z]?\b")
+_HIFEN_ISOLADO = re.compile(r"\s+[-–]\s+")
+
+
+def _limpar_nome_curso(nome: str) -> str:
+    n = _PARENTESES.sub(" ", nome or "")
+    n = _COD_NUMERICO.sub(" ", n)
+    n = _HIFEN_ISOLADO.sub(" ", n)
+    return _ESPACOS.sub(" ", n).strip()
+
 
 def _remover_html(texto: Optional[str]) -> str:
     """Remove tags HTML e normaliza espaços (descrições do Canvas vêm em HTML)."""
@@ -197,6 +218,7 @@ class TutorService:
         e NÃO chama o LLM.
         """
         tarefas = tarefas or []
+        nome_limpo = _limpar_nome_curso(course_name) or course_name
 
         if tema and tema.strip():
             consultas = [tema.strip()]
@@ -208,12 +230,12 @@ class TutorService:
             foco = "; ".join(t.title for t in tarefas[:3])
             topic_title = "Próximas tarefas pendentes"
             if not consultas:  # tarefas sem título/descrição úteis
-                consultas = [course_name]
-                foco = course_name
+                consultas = [nome_limpo]
+                foco = nome_limpo
         else:
-            consultas = [course_name]
-            foco = course_name
-            topic_title = f"Visão geral: {course_name}"
+            consultas = [nome_limpo]
+            foco = nome_limpo
+            topic_title = f"Visão geral: {nome_limpo}"
 
         trechos = self._recuperar_trechos(course_id, consultas)
 
@@ -267,6 +289,9 @@ class TutorService:
                 restantes = frases_sem_citacao(texto)
                 if restantes:
                     print(f" [Tutor] AVISO: {len(restantes)} frase(s) seguem sem citação após a reescrita.")
+
+        if not texto:
+            texto = MSG_SEM_RESUMO
 
         return CourseSummary(
             course_id=course_id,
