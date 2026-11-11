@@ -20,6 +20,8 @@ from src.state import GlauxState
 
 # Citação no formato [arquivo, p.X-Y] (ou p.X). Usada na auditoria de citações.
 _CITACAO = re.compile(r"\[[^\]]+,\s*p\.\d+")
+# Linha composta apenas pela citação (o LLM costuma quebrá-la em linha própria).
+_SO_CITACAO = re.compile(r"^\[[^\]]+,\s*p\.\d+(?:-\d+)?\]\.?$")
 
 
 def _formatar_fontes(fontes: list) -> str:
@@ -34,14 +36,22 @@ def _formatar_fontes(fontes: list) -> str:
 
 
 def _frases_sem_citacao(texto: str) -> list:
-    """Linhas de conteúdo (não títulos) que afirmam algo sem citar a fonte."""
+    """Linhas de conteúdo (não títulos) que afirmam algo sem citar a fonte.
+
+    A citação pode estar na própria linha ou na linha seguinte (o LLM costuma
+    colocar o [arquivo, p.X-Y] numa linha à parte); ambos contam como citados.
+    """
+    linhas = [l.strip() for l in (texto or "").splitlines()]
     sem_citacao = []
-    for linha in (texto or "").splitlines():
-        linha = linha.strip()
-        if len(linha) < 15 or linha.startswith("#"):
+    for i, linha in enumerate(linhas):
+        if len(linha) < 15 or linha.startswith("#") or _SO_CITACAO.match(linha):
             continue
-        if not _CITACAO.search(linha):
-            sem_citacao.append(linha)
+        if _CITACAO.search(linha):
+            continue
+        proxima = next((linhas[j] for j in range(i + 1, len(linhas)) if linhas[j]), "")
+        if _CITACAO.search(proxima):
+            continue
+        sem_citacao.append(linha)
     return sem_citacao
 
 
