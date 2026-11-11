@@ -1,6 +1,8 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from src.agente_tutor.models import CourseSummary, TaskPriorityItem
+
 class CanvasCourse(BaseModel):
     id: int
     name: str
@@ -32,8 +34,12 @@ class GlauxState(BaseModel):
     canvas_api_key: Optional[str] = None
     courses: List[CanvasCourse] = Field(default_factory=list)
     low_grade_courses: List[str] = Field(default_factory=list)
-    downloaded_files: List[CanvasFileMetadata] = Field(default_factory=list)
-    assignments: List[CanvasAssignment] = Field(default_factory=list)
+    downloaded_files: List[str] = Field(default_factory=list)
+    assignments: List[TaskPriorityItem] = Field(default_factory=list)
+    summaries: List[CourseSummary] = Field(default_factory=list)
     announcements: List[CanvasAnnouncement] = Field(default_factory=list)
     target_subject: Optional[str] = None
+    # Opções da linha de comando (ver src/graph.py).
+    tema: Optional[str] = None            # --tema: consulta única do Tutor
+    curso_alvo: Optional[int] = None      # --curso: restringe a esteira a um curso
     generated_questions: List[dict] = Field(default_factory=list)
