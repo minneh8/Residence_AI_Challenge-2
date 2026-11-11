@@ -277,6 +277,13 @@ class TutorService:
         response = self._obter_llm().invoke(messages)
         texto = (response.content or "").strip()
 
+        # Com --tema, o LLM às vezes devolve resposta vazia; tenta mais uma vez
+        # antes de cair na mensagem de fallback.
+        if not texto and tema and tema.strip():
+            print(f" [Tutor] Resposta vazia do LLM para o tema '{tema.strip()}'; tentando mais uma vez...")
+            response = self._obter_llm().invoke(messages)
+            texto = (response.content or "").strip()
+
         # Citação inline garantida: se a auditoria achar frases sem citação (e
         # não for uma recusa), reescreve UMA vez mantendo o mesmo conteúdo.
         if texto and texto != MSG_RECUSA:

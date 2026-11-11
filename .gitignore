@@ -229,3 +229,10 @@ token.json
 
 # RAG: PDFs (data/raw/<course_id>/) e índice vetorial (data/chroma/)
 data/
+
+# Arquivos locais/ferramentas que não devem ser versionados
+# (.env, .venv, data/, __pycache__/, *.py[codz] e .claude já cobertos acima)
+CLAUDE.md
+.DS_Store
+*.zip
+*.part
