@@ -58,6 +58,58 @@ Comando: `scripts/diagnostico_canvas.py --curso 93527`. É somente leitura e gra
 
 Todos os arquivos estão na pasta `course files`.
 
+## Progresso 17/11
+
+### Diagnóstico dos outros dois cursos
+
+- **93511 (Gerenciamento de Projetos de ES):** **não usa módulos** — todos os 9 arquivos
+  ficam "sem módulo". São os livros **PMBOK de ~70 MB** (`guia-pmbok-7-portugues.pdf`
+  ~70 MB e `pmbok-6-portugues.pdf` ~68 MB), fora `.docx` de templates/modelos e um
+  `APS`/`modelo` de gestão de risco.
+- **93532 (Manutenção e Evolução de Software):** tem **8 módulos nomeados por data**
+  ("Aula 03/08", "Aula 10/08", …, mais "Qualidade", "REENGENHARIA DE PROCESSOS",
+  "PROVA ORAL"). O **Pressman** (`Engenharia_de_Software_7ed_PRESSMAN…pdf`, **6,9 MB**)
+  está no módulo **"Qualidade"**. A maioria do material de aula aqui é `.pptx`.
+
+### Ordenação, paginação e formatos
+
+- A ordenação por **`updated_at` (order=desc)** foi **validada entre páginas**: rodando
+  `diagnostico_canvas.py --curso 93527 --per-page 5 --sort updated_at`, a lista saiu em
+  3 páginas (5+5+4) toda decrescente, sem repetição e sem faltar arquivo.
+- Para forçar isso, o `diagnostico_canvas.py` monta o `PaginatedList` na mão: o
+  **`per_page` é ignorado pelo canvasapi 3.6.0 em `get_files`** (ele empacota tudo em
+  `_kwargs` e o `PaginatedList` cai no default `per_page=100`).
+- **Slides `.pptx` ficam fora do download** (continua só PDF), então em 93532 boa parte
+  dos slides não é baixada nem indexada hoje.
+
+### Filtro de cursos
+
+- **PROFOCO (53876) entrou no filtro** (`IGNORED_KEYWORDS` ganhou `profoco`). A comparação
+  agora é feita sobre o **nome do curso normalizado (minúsculas, sem acento)**, e as
+  grafias acentuadas duplicadas (`atualização`, `orientações`) foram removidas da lista.
+- Regressão: dos 13 cursos que passavam antes, restam **12** (PROFOCO removido; os demais
+  seguem).
+
+### Classificador por regras (`src/agente_canvas/classificador.py`)
+
+- Classificador por regras (sem LLM) com categorias **slides, listas, trabalho, livros,
+  indefinido** e `origem` indicando a regra que decidiu. Testes offline em
+  `tests/test_classificador.py` (24 casos reais do diagnóstico + 2 sintéticos).
+- **23 de 24 casos são decididos pelas regras.** O único que escapa é
+  **"Material de Apoio GP - ENG_SOFT.pdf"**: sem palavra de livro, sem módulo, 9 MB
+  (< 20 MB) e sem contagem de páginas, ele fica **`indefinido`** pelas regras. O
+  **gabarito final dele é `livros`**, a ser decidido **pela regra de páginas depois do
+  download** (quando a contagem de páginas existir) **ou pela camada de LLM**.
+
+### Próxima etapa: camada de LLM
+
+- Acrescentar uma **camada de LLM** para os casos `indefinido`: entrada = **texto das 3
+  primeiras páginas** + **nome, módulo, pasta e nº de páginas**; **categorias fechadas**
+  (as mesmas 5); saída em **JSON validado com pydantic**; **temperatura 0**. O resultado
+  é **salvo no catálogo** do curso para **nunca reclassificar** o mesmo arquivo.
+- Com isso, a **seção 5.1 da documentação deixa de dizer "não usa LLM"** (o classificador
+  passa a ser regras + fallback de LLM).
+
 ## Decisões
 
 - **Classificação por camadas, sem LLM.** A primeira regra que decidir vale, nesta ordem: módulo → pasta → nome do arquivo → tamanho/número de páginas → `outros`.

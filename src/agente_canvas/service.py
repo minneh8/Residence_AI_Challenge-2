@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlparse
@@ -43,6 +44,13 @@ class CanvasAuthError(Exception):
 
 class CanvasUnavailableError(Exception):
     """Canvas indisponível (503/rede) após as retentativas. Aciona o modo offline."""
+
+
+def _normalizar(texto: str) -> str:
+    """Minúsculas e sem acentos, para comparar nomes de forma robusta."""
+    sem_acento = unicodedata.normalize("NFKD", texto or "")
+    sem_acento = sem_acento.encode("ascii", "ignore").decode("ascii")
+    return sem_acento.lower().strip()
 
 
 def _nome_seguro(nome: str) -> str:
@@ -126,19 +134,21 @@ class CanvasService:
         seen_course_ids = set()
         seen_course_names = set()
 
+        # Comparadas contra o nome normalizado (sem acento), então basta a
+        # grafia sem acento de cada palavra.
         IGNORED_KEYWORDS = [
-            "canal", "atualização", "atualizacao", "conectaref",
-            "comunidade", "orientações", "orientacoes", "cancelado", "cancelada",
+            "canal", "atualizacao", "conectaref", "comunidade",
+            "orientacoes", "cancelado", "cancelada", "profoco",
         ]
 
         for c in courses:
             course_name = getattr(c, "name", "").strip()
-            name_lower = course_name.lower()
+            name_norm = _normalizar(course_name)
             course_id = getattr(c, "id", None)
 
             if not course_name or not course_id:
                 continue
-            if any(keyword in name_lower for keyword in IGNORED_KEYWORDS):
+            if any(keyword in name_norm for keyword in IGNORED_KEYWORDS):
                 continue
             if course_id in seen_course_ids or course_name in seen_course_names:
                 continue

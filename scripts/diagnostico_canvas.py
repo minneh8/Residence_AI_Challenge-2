@@ -94,6 +94,28 @@ def _atrib(obj, nome, padrao=None):
     return getattr(obj, nome, padrao)
 
 
+def _get_files_ordenados(service, curso, sort: str, per_page: int = None):
+    """Lista os arquivos do curso ordenados (order=desc).
+
+    canvasapi 3.6.0: Course.get_files(**kwargs) empacota tudo em `_kwargs`, então
+    um `per_page` do usuário nunca vira chave direta do PaginatedList e é trocado
+    pelo default 100 (paginated_list.py:61). Quando per_page é pedido, montamos o
+    PaginatedList na mão para que o per_page realmente chegue na query e force a
+    paginação; sem per_page, usamos a chamada normal do canvasapi.
+    """
+    if not per_page:
+        return curso.get_files(sort=sort, order="desc")
+
+    from canvasapi.file import File
+    from canvasapi.paginated_list import PaginatedList
+
+    requester = service.canvas._Canvas__requester
+    return PaginatedList(
+        File, requester, "GET", f"courses/{curso.id}/files",
+        per_page=per_page, sort=sort, order="desc",
+    )
+
+
 def _listar_com_pagina(paginado, contador: ContadorHTTP) -> list[tuple[int, object]]:
     """Itera um PaginatedList anotando de qual página (requisição) veio cada item."""
     inicio = contador.total
@@ -121,7 +143,7 @@ def _arquivo_para_dict(f, pastas: dict, modulos_por_arquivo: dict) -> dict:
     }
 
 
-def coletar(curso_id: int) -> dict:
+def coletar(curso_id: int, per_page: int = None, sort: str = "created_at") -> dict:
     service = CanvasService()
     contador = _instalar_contador(service)
     resultado: dict = {
@@ -194,32 +216,38 @@ def coletar(curso_id: int) -> dict:
         == sorted(a["display_name"].lower() for a in arquivos if a["display_name"]),
     }
 
-    # 6. Teste de ordenação: sort=created_at, order=desc
+    # 6. Teste de ordenação: sort=<created_at|updated_at>, order=desc
     contador.etapa = "arquivos_ordenados"
-    teste: dict = {"aceito": None}
+    teste: dict = {"aceito": None, "sort": sort, "per_page": per_page}
     if "arquivos" not in resultado["erros"]:
         try:
             ordenados = _listar_com_pagina(
-                curso.get_files(sort="created_at", order="desc"), contador
+                _get_files_ordenados(service, curso, sort, per_page), contador
             )
             teste["aceito"] = True
-            datas = [_atrib(f, "created_at") or "" for _, f in ordenados]
+            datas = [_atrib(f, sort) or "" for _, f in ordenados]
+            ids_ordem = [f.id for _, f in ordenados]
+            paginas = Counter(pag for pag, _ in ordenados)
             primeira = [f for pag, f in ordenados if pag == 1]
             n1 = len(primeira)
             mais_recentes = sorted(
-                arquivos, key=lambda a: a["created_at"] or "", reverse=True
+                arquivos, key=lambda a: a[sort] or "", reverse=True
             )[:n1]
             teste.update({
                 "requisicoes": contador.por_etapa().get("arquivos_ordenados", 0),
+                "paginas": len(paginas),
+                "itens_por_pagina": dict(sorted(paginas.items())),
                 "itens_primeira_pagina": n1,
                 "lista_toda_desc": datas == sorted(datas, reverse=True),
                 "primeira_pagina_desc": datas[:n1] == sorted(datas[:n1], reverse=True),
                 "primeira_pagina_sao_os_mais_recentes": (
                     {f.id for f in primeira} == {a["id"] for a in mais_recentes}
                 ),
-                "ordem_ids": [f.id for _, f in ordenados],
+                "sem_repeticoes": len(ids_ordem) == len(set(ids_ordem)),
+                "sem_faltantes": set(ids_ordem) == {a["id"] for a in arquivos},
+                "ordem_ids": ids_ordem,
                 "mesmo_conjunto_da_padrao": (
-                    {f.id for _, f in ordenados} == {a["id"] for a in arquivos}
+                    set(ids_ordem) == {a["id"] for a in arquivos}
                 ),
             })
         except (Unauthorized, Forbidden) as e:
@@ -286,7 +314,7 @@ def imprimir(r: dict) -> None:
           f"ordenada por nome: {lp['ordenada_por_nome']}")
 
     t = r["teste_ordenacao"]
-    print("\nTeste sort=created_at, order=desc:")
+    print(f"\nTeste sort={t.get('sort')}, order=desc, per_page={t.get('per_page')}:")
     for k, v in t.items():
         if k != "ordem_ids":
             print(f"  {k}: {v}")
@@ -303,11 +331,16 @@ def imprimir(r: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--curso", type=int, required=True, help="id do curso no Canvas")
+    parser.add_argument("--per-page", type=int, default=None,
+                        help="itens por página na listagem de teste (get_files)")
+    parser.add_argument("--sort", choices=["created_at", "updated_at"],
+                        default="created_at",
+                        help="campo de ordenação do teste (order=desc)")
     args = parser.parse_args()
     load_dotenv()
 
     try:
-        r = coletar(args.curso)
+        r = coletar(args.curso, per_page=args.per_page, sort=args.sort)
     except CanvasAuthError as e:
         print(f"[ERRO] {e}")
         return 1
