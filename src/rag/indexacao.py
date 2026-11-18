@@ -34,7 +34,7 @@ DIR_CHROMA = DIR_DADOS / "chroma"
 # PDFs e suas datas de modificação não mudarem. Fica em data/ (fora do git).
 ARQ_MANIFEST = DIR_DADOS / "indice_manifest.json"
 
-METADADOS_CHUNK = ("arquivo", "pagina", "pagina_fim", "course_id", "caracteres")
+METADADOS_CHUNK = ("arquivo", "pagina", "pagina_fim", "course_id", "caracteres", "categoria")
 TAMANHO_LOTE_GRAVACAO = 1000
 
 
@@ -191,6 +191,9 @@ def indexar_curso(course_id: int, janela: int = 1, sobreposicao: int = 0,
             "nada foi indexado.")
 
     vetores = embeddings_passages([c["texto"] for c in chunks])
+
+    for c in chunks:
+        c.setdefault("categoria", "conteudo")
 
     colecao = obter_colecao(colecao_nome, criar=True)
     colecao.delete(where={"course_id": course_id})
