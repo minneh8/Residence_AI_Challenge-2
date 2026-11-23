@@ -18,8 +18,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import openai
+import groq
 from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 from prompts.agente_gerador_prompts import PROMPT_SISTEMA_GERADOR, montar_prompt_usuario
 from pydantic import TypeAdapter, ValidationError
 
@@ -45,7 +46,6 @@ TOP_P = 0.95
 LIMITE_TOKENS = 8000
 ESFORCO_RACIOCINIO = "low"
 TEMPO_LIMITE_S = 60
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 CAMINHO_ENV = Path(__file__).resolve().parents[2] / ".env"  # .env na raiz do projeto
 
 MENSAGEM_SEM_MATERIAL = (
@@ -154,11 +154,16 @@ def validar_saida(
 
 
 def chamar_groq(mensagens: list[dict]) -> RespostaLLM:
-    """Chama o modelo no Groq pelo cliente openai (a API do Groq é compatível).
+    """Chama o modelo no Groq pelo ChatGroq (langchain-groq), como o Tutor.
 
     A chave vem de GROQ_API_KEY, lida do .env na raiz do projeto. O cliente não repete
     chamadas sozinho (max_retries=0): a nova tentativa é decidida em
     gerar_questoes, para serem no máximo TENTATIVAS chamadas por pedido.
+
+    O ChatGroq só tem campo próprio para alguns parâmetros; top_p, o modo JSON,
+    include_reasoning e max_completion_tokens vão em model_kwargs, que ele
+    repassa sem mudar para o SDK groq. O finish_reason vem em
+    response_metadata da resposta.
     """
     load_dotenv(CAMINHO_ENV)
     chave = os.getenv("GROQ_API_KEY", "")
@@ -167,22 +172,25 @@ def chamar_groq(mensagens: list[dict]) -> RespostaLLM:
             "GROQ_API_KEY não encontrada. Crie o arquivo .env na raiz do projeto "
             "(a pasta que tem src/ e prompts/) com a linha GROQ_API_KEY=<sua chave>."
         )
-    cliente = openai.OpenAI(
-        base_url=GROQ_BASE_URL, api_key=chave, timeout=TEMPO_LIMITE_S, max_retries=0
-    )
-    resposta = cliente.chat.completions.create(
+    llm = ChatGroq(
         model=MODELO,
-        messages=mensagens,
+        api_key=chave,
         temperature=TEMPERATURA,
-        top_p=TOP_P,
-        max_completion_tokens=LIMITE_TOKENS,
         reasoning_effort=ESFORCO_RACIOCINIO,
-        response_format={"type": "json_object"},
-        # O cliente openai não conhece include_reasoning; vai direto no corpo do pedido.
-        extra_body={"include_reasoning": False},
+        timeout=TEMPO_LIMITE_S,
+        max_retries=0,
+        model_kwargs={
+            "top_p": TOP_P,
+            "max_completion_tokens": LIMITE_TOKENS,
+            "response_format": {"type": "json_object"},
+            "include_reasoning": False,
+        },
     )
-    escolha = resposta.choices[0]
-    return RespostaLLM(conteudo=escolha.message.content, finish_reason=escolha.finish_reason)
+    resposta = llm.invoke(mensagens)
+    conteudo = resposta.content if isinstance(resposta.content, str) else None
+    return RespostaLLM(
+        conteudo=conteudo, finish_reason=resposta.response_metadata.get("finish_reason")
+    )
 
 
 def gerar_questoes(
@@ -224,7 +232,7 @@ def gerar_questoes(
     for tentativa in range(1, TENTATIVAS + 1):
         try:
             questoes = validar_saida(chamar_llm(mensagens), quantidade, tipos, trechos)
-        except (SaidaInvalida, openai.OpenAIError) as erro:
+        except (SaidaInvalida, groq.GroqError) as erro:
             logger.warning(
                 "Gerador de questões: tentativa %d de %d falhou: %s", tentativa, TENTATIVAS, erro
             )

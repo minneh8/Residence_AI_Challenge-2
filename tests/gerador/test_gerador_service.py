@@ -8,7 +8,7 @@ import logging
 from types import SimpleNamespace
 
 import httpx
-import openai
+import groq
 import pytest
 from dubles_gerador import (
     TRECHO_FRACO,
@@ -50,9 +50,9 @@ def sem_chave(questao: dict, chave: str) -> dict:
     return copia
 
 
-def erro_de_conexao() -> openai.APIConnectionError:
+def erro_de_conexao() -> groq.APIConnectionError:
     pedido = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
-    return openai.APIConnectionError(request=pedido)
+    return groq.APIConnectionError(request=pedido)
 
 
 # --- Caminho feliz -----------------------------------------------------------
@@ -365,39 +365,77 @@ def test_copiar_o_exemplo_do_prompt_gera_erro(buscar):
 def test_chamar_groq_usa_os_parametros_combinados(monkeypatch):
     capturado = {}
 
-    class ClienteFalso:
+    class ChatGroqFalso:
         def __init__(self, **opcoes):
-            capturado["cliente"] = opcoes
-            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._criar))
+            capturado["opcoes"] = opcoes
 
-        def _criar(self, **pedido):
-            capturado["pedido"] = pedido
-            mensagem = SimpleNamespace(content='{"questoes": []}')
-            escolha = SimpleNamespace(message=mensagem, finish_reason="stop")
-            return SimpleNamespace(choices=[escolha])
+        def invoke(self, mensagens):
+            capturado["mensagens"] = mensagens
+            return SimpleNamespace(
+                content='{"questoes": []}', response_metadata={"finish_reason": "stop"}
+            )
 
     monkeypatch.setattr(service, "load_dotenv", lambda caminho: False)  # não lê o .env real
     monkeypatch.setenv("GROQ_API_KEY", "chave-falsa-de-teste")
-    monkeypatch.setattr(service.openai, "OpenAI", ClienteFalso)
+    monkeypatch.setattr(service, "ChatGroq", ChatGroqFalso)
 
     mensagens = [{"role": "user", "content": "oi"}]
     assert service.chamar_groq(mensagens) == RespostaLLM('{"questoes": []}', "stop")
-    assert capturado["cliente"] == {
-        "base_url": "https://api.groq.com/openai/v1",
+    assert capturado["mensagens"] == mensagens
+    assert capturado["opcoes"] == {
+        "model": "openai/gpt-oss-20b",
         "api_key": "chave-falsa-de-teste",
+        "temperature": 0.6,
+        "reasoning_effort": "low",
         "timeout": 60,
         "max_retries": 0,
+        "model_kwargs": {
+            "top_p": 0.95,
+            "max_completion_tokens": 8000,
+            "response_format": {"type": "json_object"},
+            "include_reasoning": False,
+        },
     }
-    assert capturado["pedido"] == {
+
+
+def test_chamar_groq_chega_ao_sdk_groq_com_o_pedido_combinado(monkeypatch):
+    """Usa o ChatGroq de verdade e troca só o cliente do SDK groq, para ver o pedido final."""
+    capturado = {}
+
+    class CompletionsFalso:
+        def create(self, **pedido):
+            capturado["pedido"] = pedido
+            mensagem = {"role": "assistant", "content": '{"questoes": []}'}
+            return {"choices": [{"message": mensagem, "finish_reason": "stop"}], "usage": {}}
+
+    class ChatGroqComClienteFalso(service.ChatGroq):
+        def __init__(self, **opcoes):
+            super().__init__(**opcoes)
+            capturado["sdk"] = (self.client._client.timeout, self.client._client.max_retries)
+            self.client = CompletionsFalso()
+
+    monkeypatch.setattr(service, "load_dotenv", lambda caminho: False)  # não lê o .env real
+    monkeypatch.setenv("GROQ_API_KEY", "chave-falsa-de-teste")
+    monkeypatch.setattr(service, "ChatGroq", ChatGroqComClienteFalso)
+
+    mensagens = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    assert service.chamar_groq(mensagens) == RespostaLLM('{"questoes": []}', "stop")
+    assert capturado["sdk"] == (60, 0)
+    pedido = capturado["pedido"]
+    assert pedido["messages"] == mensagens
+    assert {chave: pedido[chave] for chave in (
+        "model", "temperature", "top_p", "max_completion_tokens",
+        "reasoning_effort", "response_format", "include_reasoning",
+    )} == {
         "model": "openai/gpt-oss-20b",
-        "messages": mensagens,
         "temperature": 0.6,
         "top_p": 0.95,
         "max_completion_tokens": 8000,
         "reasoning_effort": "low",
         "response_format": {"type": "json_object"},
-        "extra_body": {"include_reasoning": False},
+        "include_reasoning": False,
     }
+    assert "max_tokens" not in pedido  # o limite vai só como max_completion_tokens
 
 
 def test_chamar_groq_sem_chave_avisa_onde_preencher(monkeypatch):
