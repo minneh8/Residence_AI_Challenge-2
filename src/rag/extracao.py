@@ -17,7 +17,6 @@ Páginas curtas ou vazias são mantidas aqui; o descarte é feito no chunking.
 
 import logging
 import re
-import unicodedata
 from pathlib import Path
 
 import pymupdf
@@ -28,22 +27,8 @@ logger = logging.getLogger(__name__)
 RAIZ_REPO = Path(__file__).resolve().parents[2]
 DIR_RAW = RAIZ_REPO / "data" / "raw"
 
-# Arquivos cujo nome normalizado (minúsculas, sem acentos) contenha algum destes
-# padrões são tratados como material de apoio (listas, exercícios, roteiros) e
-# NÃO entram no índice. Eles continuam em data/raw/; só não são indexados.
-PADROES_NAO_CONTEUDO = ("lista", "exercicio", "ex_", "roteiro")
-
-
-def _normalizar_nome(nome: str) -> str:
-    """Minúsculas e sem acentos, para casar com PADROES_NAO_CONTEUDO."""
-    decomposto = unicodedata.normalize("NFKD", nome.casefold())
-    return "".join(c for c in decomposto if not unicodedata.combining(c))
-
-
-def eh_nao_conteudo(nome: str) -> bool:
-    """True se o nome do arquivo bate com algum padrão de material de apoio."""
-    normalizado = _normalizar_nome(nome)
-    return any(padrao in normalizado for padrao in PADROES_NAO_CONTEUDO)
+# Todas as categorias entram no índice (slides, listas, trabalho, livros,
+# outros); quem consulta escolhe o que quer com buscar(..., categorias=[...]).
 
 # Espaços "exóticos" que viram espaço comum (NBSP, espaços finos, etc.).
 _ESPACOS_UNICODE = re.compile(r"[  -   　]")
@@ -105,13 +90,12 @@ def categoria_do_pdf(caminho: Path, course_id: int) -> str:
 
 
 def listar_pdfs(course_id: int) -> list[Path]:
-    """Lista, em ordem alfabética de nome, os PDFs de conteúdo do curso.
+    """Lista, em ordem alfabética de nome, todos os PDFs do curso.
 
     Busca recursiva em data/raw/<course_id>/: as subpastas de categoria
     (slides/, listas/, trabalho/, livros/, outros/) criadas pelo Agente Canvas
-    e também PDFs ainda soltos na raiz. Arquivos de apoio (ver
-    PADROES_NAO_CONTEUDO: listas, exercícios, roteiros) continuam fora da
-    indexação, pelo nome, e são registrados no log.
+    e também PDFs ainda soltos na raiz. Todas as categorias entram no índice;
+    o filtro é feito na busca (buscar(..., categorias=[...])).
 
     Raises:
         FileNotFoundError: se a pasta do curso não existir.
@@ -119,18 +103,10 @@ def listar_pdfs(course_id: int) -> list[Path]:
     pasta = DIR_RAW / str(course_id)
     if not pasta.is_dir():
         raise FileNotFoundError(f"Pasta do curso não encontrada: {pasta}")
-    todos = sorted(
+    return sorted(
         (p for p in pasta.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"),
         key=lambda p: (p.name.lower(), str(p).lower()),
     )
-    conteudo = [p for p in todos if not eh_nao_conteudo(p.name)]
-    ignorados = [p for p in todos if eh_nao_conteudo(p.name)]
-    if ignorados:
-        logger.info(
-            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexação: %s",
-            course_id, len(ignorados), ", ".join(p.name for p in ignorados),
-        )
-    return conteudo
 
 
 def extrair_pdf(caminho: Path, course_id: int, max_paginas: int | None = None) -> list[dict]:

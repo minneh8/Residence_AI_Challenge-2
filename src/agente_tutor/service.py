@@ -26,6 +26,10 @@ MAX_CARACTERES_CONSULTA = 300
 # Trechos recuperados por consulta.
 K_BUSCA = 3
 
+# O Tutor resume o conteúdo das aulas: busca só nos slides (listas, trabalhos e
+# livros também estão no índice, mas ficam de fora do resumo).
+CATEGORIAS_TUTOR = ["slides"]
+
 _TAGS_HTML = re.compile(r"<[^>]+>")
 _ESPACOS = re.compile(r"\s+")
 
@@ -188,7 +192,7 @@ class TutorService:
             if not consulta or not consulta.strip():
                 continue
             try:
-                resultados = buscar(consulta, course_id, k=K_BUSCA)
+                resultados = buscar(consulta, course_id, k=K_BUSCA, categorias=CATEGORIAS_TUTOR)
             except ValueError:
                 continue
             for r in resultados:

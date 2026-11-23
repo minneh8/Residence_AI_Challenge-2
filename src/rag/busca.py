@@ -2,7 +2,12 @@
 
 Interface pública consumida pelos agentes:
 
-    buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]
+    buscar(pergunta: str, course_id: int, k: int = 5,
+           categorias: list[str] | None = None) -> list[dict]
+
+`categorias` restringe a busca às categorias de material do Agente Canvas
+(metadata "categoria" dos chunks: slides, listas, trabalho, livros, outros).
+O Tutor usa ["slides"]; o Gerador deve usar ["listas"] (ou listas + slides).
 
 Cada item retornado tem as chaves:
     texto      (str)   conteúdo do trecho
@@ -33,16 +38,31 @@ logger = logging.getLogger(__name__)
 COLECAO_PADRAO = "rag_j1_s0"
 
 
-def _validar(pergunta: str, k: int) -> None:
+def _validar(pergunta: str, k: int, categorias) -> None:
     if not isinstance(pergunta, str) or not pergunta.strip():
         raise ValueError("A pergunta não pode ser vazia.")
     if k <= 0:
         raise ValueError("k deve ser maior que zero.")
+    if categorias is not None:
+        if isinstance(categorias, str) or not categorias \
+                or not all(isinstance(c, str) and c for c in categorias):
+            raise ValueError("categorias deve ser uma lista não vazia de nomes de categoria.")
 
 
-def buscar_na_colecao(pergunta: str, course_id: int, k: int, colecao: str) -> list[dict]:
+def filtro_where(course_id: int, categorias=None) -> dict:
+    """Filtro do Chroma: só course_id, ou $and de course_id e categoria $in."""
+    if not categorias:
+        return {"course_id": course_id}
+    return {"$and": [
+        {"course_id": course_id},
+        {"categoria": {"$in": list(categorias)}},
+    ]}
+
+
+def buscar_na_colecao(pergunta: str, course_id: int, k: int, colecao: str,
+                      categorias: list[str] | None = None) -> list[dict]:
     """Como buscar(), mas na coleção indicada. Útil para comparar configurações."""
-    _validar(pergunta, k)
+    _validar(pergunta, k, categorias)
 
     col = obter_colecao(colecao)
     indexado = col is not None and col.get(
@@ -54,9 +74,12 @@ def buscar_na_colecao(pergunta: str, course_id: int, k: int, colecao: str) -> li
     resultado = col.query(
         query_embeddings=[embedding_query(pergunta.strip())],
         n_results=k,
-        where={"course_id": course_id},
+        where=filtro_where(course_id, categorias),
         include=["documents", "metadatas", "distances"],
     )
+    if categorias and not resultado["ids"][0]:
+        logger.warning("Curso %s sem chunks das categorias %s na coleção %s.",
+                       course_id, list(categorias), colecao)
     trechos = [
         {
             "texto": texto,
@@ -72,13 +95,16 @@ def buscar_na_colecao(pergunta: str, course_id: int, k: int, colecao: str) -> li
     return trechos
 
 
-def buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]:
+def buscar(pergunta: str, course_id: int, k: int = 5,
+           categorias: list[str] | None = None) -> list[dict]:
     """Retorna os k trechos mais relevantes para a pergunta na disciplina.
 
     Args:
         pergunta: texto da pergunta do estudante. Não pode ser vazio.
         course_id: id da disciplina no Canvas.
         k: quantidade máxima de trechos retornados. Deve ser maior que zero.
+        categorias: se informado, só trechos dessas categorias (ex.: ["slides"]).
+            None (padrão) busca em todas.
 
     Returns:
         Lista de dicts com as chaves texto, arquivo, pagina, pagina_fim e
@@ -86,6 +112,7 @@ def buscar(pergunta: str, course_id: int, k: int = 5) -> list[dict]:
         se o curso não estiver indexado em COLECAO_PADRAO.
 
     Raises:
-        ValueError: se a pergunta for vazia (ou só espaços) ou se k <= 0.
+        ValueError: se a pergunta for vazia (ou só espaços), se k <= 0 ou se
+            categorias não for uma lista não vazia de strings.
     """
-    return buscar_na_colecao(pergunta, course_id, k, COLECAO_PADRAO)
+    return buscar_na_colecao(pergunta, course_id, k, COLECAO_PADRAO, categorias)

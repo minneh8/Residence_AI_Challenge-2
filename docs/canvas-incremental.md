@@ -15,7 +15,7 @@ Branch: `feature/canvas-incremental`. Diagnóstico feito em 2026-11-17.
   - dois arquivos com o mesmo nome em pastas diferentes colidem.
 - `user_id` é fixo, `"estudante_glaux"` (`src/graph.py`). `get_current_user` é usado só para validar o token, e o id não é guardado.
 - Não existe registro dos downloads. A única referência é o que está em `data/raw/<course_id>/`.
-- `PADROES_NAO_CONTEUDO` (`src/rag/extracao.py`) tira do índice os arquivos de listas, exercícios e roteiros. Eles são baixados normalmente, só não são indexados.
+- `PADROES_NAO_CONTEUDO` (`src/rag/extracao.py`) tira do índice os arquivos de listas, exercícios e roteiros. Eles são baixados normalmente, só não são indexados. *(Removido na etapa 3, 23/11: todas as categorias entram no índice e o filtro é feito na busca.)*
 - `fetch_and_save_course_data` não tem retry. O retry com esperas de 2, 5 e 10 s cobre só `get_current_user` e `get_courses`. Uma falha em `get_course` ou `get_assignments` derruba a esteira.
 - O RAG é chaveado pelo **nome do arquivo**:
   - metadata `arquivo`;
@@ -104,6 +104,37 @@ Todos os arquivos estão na pasta `course files`.
   download** (quando a contagem de páginas existir) **ou pela camada de LLM**.
 
 ## Progresso 23/11
+
+### Fechamento do dia
+
+- **Classificação:** 22 de 22 PDFs dos 3 cursos classificados pelas regras. "Material de
+  Apoio GP - ENG_SOFT.pdf" vira `livros` por `paginas>100` (118 páginas) depois do
+  download. A LLM foi testada à parte com
+  `scripts/testar_classificador_llm.py --forcar-llm`: `livros`, confiança 0,9, 650
+  tokens, 1,4 s.
+- **Teste real no 93527:**
+  - 1ª execução: 5 PDFs baixados e 8 migrados sem baixar, 24 requisições ao Canvas;
+  - 2ª execução: 0 downloads, 4 requisições, parada antecipada no 1º item e
+    reindexação pulada.
+- **Erro da API da LLM:** o arquivo fica pendente (`pendentes_llm`), não é gravado no
+  catálogo e o estado do aluno não avança; é tentado de novo na próxima sincronização.
+- **RAG:** todas as categorias no índice, `buscar(..., categorias=[...])` filtra por
+  categoria e o Tutor busca só em slides. Avaliação oficial (18 perguntas, `rag_j1_s0`):
+
+  | Variante | k | HitRate@k | Recall@k | Precision@k | MRR |
+  |---|---|---|---|---|---|
+  | sem filtro | 3 | 0,722 | 0,630 | 0,296 | 0,630 |
+  | sem filtro | 5 | 0,722 | 0,667 | 0,200 | 0,630 |
+  | `--categorias slides` | 3 | 0,722 | 0,630 | 0,296 | 0,630 |
+  | `--categorias slides` | 5 | 0,722 | 0,667 | 0,200 | 0,630 |
+  | Referência: só aula00 a aula04 | 5 | 0,778 | - | - | 0,657 |
+  | Referência: 12 PDFs, listas no topo | 5 | 0,722 | - | - | 0,630 |
+
+- **Próxima etapa:**
+  - interface Streamlit: botão "Sincronizar" com o resumo da sincronização, materiais
+    por categoria e campo de tema → resumo do Tutor com citações;
+  - orquestrador mínimo: supervisor com estado compartilhado e roteamento por regra;
+  - medir o tempo só da sincronização (separado da indexação e do Tutor).
 
 ### Ajustes no classificador
 
@@ -229,6 +260,19 @@ são decididos pelas regras.
 - `categoria` no índice é `raiz` para PDFs que ficaram soltos na pasta do curso.
 - A contagem por categoria do resumo é a do catálogo inteiro do curso, não só da execução.
 
+## Etapa 3: RAG filtrando por categoria (23/11)
+
+- `buscar(pergunta, course_id, k=5, categorias=None)`: com `categorias`, filtra no
+  Chroma com `$and` de `course_id` e `categoria $in categorias`.
+- `PADROES_NAO_CONTEUDO` removido: todas as categorias entram no índice. O 93527
+  reindexado tem 358 chunks (slides 299, listas 31, trabalho 28).
+- **Tutor** busca só em `categorias=["slides"]`. **Gerador** deve usar `["listas"]` (ou
+  listas + slides) quando entrar no grafo.
+- Avaliação oficial (18 perguntas, `rag_j1_s0`): HitRate@5 0,722 e MRR 0,630, com ou
+  sem o filtro de slides. Detalhes em `docs/DECISOES.md` e `avaliacao/resultados.md`.
+- Risco: um curso sem slides em PDF (ex.: 93511, só livros e trabalhos) não tem trechos
+  para o Tutor com o filtro `["slides"]`, e o Tutor responde "Matéria não indexada".
+
 ## Decisões
 
 - **Classificação por camadas.** A primeira regra que decidir vale, nesta ordem: nome do arquivo (listas/trabalho/livros) → módulo → nome do arquivo (aula/slide) → número de páginas/tamanho → `indefinido` → LLM → `outros`. Não há camada de pasta: nenhum dos 3 cursos diagnosticados usa pastas (tudo fica em `course files`). Regras e LLM estão implementadas.
@@ -245,7 +289,10 @@ são decididos pelas regras.
 3. ~~Refazer o diagnóstico dos 3 cursos e aplicar o classificador a todos os PDFs.~~ Feito em 23/11.
 4. ~~Implementar a camada de LLM e o download incremental.~~ Feito em 23/11 (etapa 2).
 5. O curso **96848** não pertence a esta conta. Ele só aparece no `COURSE_MAP_OFFLINE` de `node.py`.
-6. Próxima etapa: decidir o destino do `PADROES_NAO_CONTEUDO` agora que a categoria está na metadata dos chunks.
+6. ~~Decidir o destino do `PADROES_NAO_CONTEUDO`.~~ Removido na etapa 3 (23/11).
+7. **Gerador:** quando entrar no grafo, deve chamar `buscar(..., categorias=["listas"])`
+   (ou `["listas", "slides"]`, para gerar questões no estilo das listas com o conteúdo
+   das aulas). Hoje ele não está no grafo.
 
 ## Como recriar o ambiente
 
