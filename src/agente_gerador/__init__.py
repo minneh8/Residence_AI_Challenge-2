@@ -11,8 +11,8 @@ Uso, a partir da raiz do projeto (a pasta que tem src/ e prompts/):
     else:
         print(resultado.mensagem)  # "sem_material" ou "erro"
 
-A pasta usa underline (agente_gerador), e não hífen como agente-abnt e
-agente-canvas, para poder ser importada normalmente (from src.agente_gerador ...).
+A pasta usa underline (agente_gerador), como agente_canvas e agente_tutor, para
+poder ser importada normalmente (from src.agente_gerador ...).
 """
 
 from .service import gerar_questoes

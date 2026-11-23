@@ -21,11 +21,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.agente_gerador import service  # noqa: E402
-from src.agente_gerador.models import QuestaoMultiplaEscolha, ResultadoGeracao  # noqa: E402
+from src.agente_gerador.apresentacao import formatar  # noqa: E402
+from src.agente_gerador.models import ResultadoGeracao  # noqa: E402
 from src.rag import buscar as buscar_no_rag  # noqa: E402
-
-TAMANHO_FONTE = 160  # caracteres do trecho mostrados em cada questão
-
 
 def carregar_trechos(caminho: Path) -> list[dict]:
     """Lê uma lista de trechos no formato do buscar(): texto, arquivo, pagina, score."""
@@ -47,21 +45,8 @@ def buscar_no_arquivo(trechos: list[dict]):
 
 
 def mostrar(resultado: ResultadoGeracao) -> None:
-    """Imprime o resultado de um jeito fácil de ler."""
-    print(f"status: {resultado.status}")
-    if resultado.mensagem:
-        print(f"mensagem para o aluno: {resultado.mensagem}")
-    for questao in resultado.questoes:
-        print()
-        print(f"[{questao.id}] {questao.tipo} | assunto: {questao.assunto}")
-        print(f"  {questao.enunciado}")
-        if isinstance(questao, QuestaoMultiplaEscolha):
-            for letra, texto in questao.alternativas.items():
-                marca = "*" if letra == questao.correta else " "
-                print(f"   {marca} {letra}) {texto}")
-        ref = questao.trecho_referencia
-        resumo = ref.texto if len(ref.texto) <= TAMANHO_FONTE else ref.texto[:TAMANHO_FONTE] + "..."
-        print(f"  fonte: {ref.arquivo}, p. {ref.pagina}: {resumo}")
+    """Imprime o resultado de um jeito fácil de ler (texto de apresentacao.formatar)."""
+    print(formatar(resultado))
 
 
 def main(argv: list[str] | None = None, chamar_llm=None) -> int:
