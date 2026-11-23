@@ -94,12 +94,37 @@ Todos os arquivos estão na pasta `course files`.
 
 - Classificador por regras (sem LLM) com categorias **slides, listas, trabalho, livros,
   indefinido** e `origem` indicando a regra que decidiu. Testes offline em
-  `tests/test_classificador.py` (24 casos reais do diagnóstico + 2 sintéticos).
-- **23 de 24 casos são decididos pelas regras.** O único que escapa é
+  `tests/test_classificador.py`: **22 casos reais** do diagnóstico + **2 sintéticos**
+  (páginas e indefinido) + **5 sintéticos** de 23/11 (camada de módulo e palavras
+  inteiras), 29 no total.
+- **21 dos 22 casos reais são decididos pelas regras.** O único que escapa é
   **"Material de Apoio GP - ENG_SOFT.pdf"**: sem palavra de livro, sem módulo, 9 MB
   (< 20 MB) e sem contagem de páginas, ele fica **`indefinido`** pelas regras. O
   **gabarito final dele é `livros`**, a ser decidido **pela regra de páginas depois do
   download** (quando a contagem de páginas existir) **ou pela camada de LLM**.
+
+## Progresso 23/11
+
+### Ajustes no classificador
+
+- **Camada de módulo por categoria.** Antes, qualquer palavra conhecida no módulo
+  devolvia `slides`. Agora cada conjunto decide a sua categoria:
+  lista/exercicio/atividade/entrega → listas; roteiro/trabalho/projeto → trabalho;
+  livro/bibliografia/leitura → livros; aula/slide → slides. Um módulo neutro
+  ("Qualidade", "Custos", "PROVA ORAL") não decide e passa para a próxima camada. O
+  padrão de edição deixou de valer no módulo.
+- **Palavras inteiras.** O nome e o módulo são normalizados e divididos em palavras
+  (por camelCase, por caractere não alfanumérico e entre letra e dígito: `aula03` →
+  `aula 03`). Cada palavra aceita o plural em "s" (`slides`, `exercicios`). Assim `aps`
+  não casa mais com "etapas"/"mapas". Exceções: `ex_` continua como **prefixo** do nome,
+  e a edição (`7ed`, `7a ed`, `edicao`) continua por regex.
+- Os esperados dos 22 casos reais e dos 2 sintéticos antigos não mudaram.
+- O diagnóstico dos 3 cursos não pôde ser refeito em 23/11. A causa: o `.env` estava
+  com o host de exemplo `canvas.instructure.com`, que não é a instância da instituição
+  e responde 503. O `CanvasService` não tem mais URL padrão: sem `CANVAS_API_URL` ele
+  encerra com "CANVAS_API_URL não definido" em vez de cair no modo offline.
+- `scripts/classificar_logs.py` aplica o classificador a todos os PDFs dos logs
+  `data/logs/diagnostico_<curso>.json` e destaca os indefinidos.
 
 ### Próxima etapa: camada de LLM
 
@@ -112,7 +137,7 @@ Todos os arquivos estão na pasta `course files`.
 
 ## Decisões
 
-- **Classificação por camadas, sem LLM.** A primeira regra que decidir vale, nesta ordem: módulo → pasta → nome do arquivo → tamanho/número de páginas → `outros`.
+- **Classificação por camadas.** A primeira regra que decidir vale, nesta ordem: nome do arquivo (listas/trabalho/livros) → módulo → nome do arquivo (aula/slide) → número de páginas/tamanho → `indefinido` → LLM → `outros`. Não há camada de pasta: nenhum dos 3 cursos diagnosticados usa pastas (tudo fica em `course files`). As regras estão implementadas; a camada de LLM é a próxima etapa.
 - **Parada antecipada.** O agente lista com `sort=updated_at&order=desc` e compara **id + updated_at** com o catálogo. Ele para no primeiro arquivo que já está registrado com o mesmo `updated_at`.
 - **Catálogo por curso** em `data/raw/<course_id>/_arquivos.json`, chaveado pelo **id do Canvas**. Guarda nome, categoria, tamanho, datas, pasta, módulo e caminho local.
 - **Estado do aluno** em `data/canvas_state/<user_id>.json`, usando o id real de `get_current_user`.
@@ -121,10 +146,11 @@ Todos os arquivos estão na pasta `course files`.
 
 ## Pendências
 
-1. Rodar o diagnóstico nos cursos **93511** (Gerenciamento de Projetos de ES) e **93532** (Manutenção e Evolução de Software).
-2. Testar a ordenação entre páginas com `--per-page 5 --sort updated_at`. Para isso, o `diagnostico_canvas.py` precisa ganhar essas duas opções.
-3. Depois disso, fazer a implementação.
-4. O curso **96848** não pertence a esta conta. Ele só aparece no `COURSE_MAP_OFFLINE` de `node.py`.
+1. ~~Rodar o diagnóstico nos cursos 93511 e 93532.~~ Feito em 17/11.
+2. ~~Testar a ordenação entre páginas com `--per-page 5 --sort updated_at`.~~ Feito em 17/11.
+3. Refazer o diagnóstico dos 3 cursos (o Canvas estava fora em 23/11) e aplicar o classificador a todos os PDFs dos logs, para conferir quais ficam `indefinido`.
+4. Implementar a camada de LLM e depois o download incremental.
+5. O curso **96848** não pertence a esta conta. Ele só aparece no `COURSE_MAP_OFFLINE` de `node.py`.
 
 ## Como recriar o ambiente
 

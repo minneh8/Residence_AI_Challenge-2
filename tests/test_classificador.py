@@ -3,7 +3,8 @@
 
 Casos reais extraídos de data/logs/diagnostico_*.json (nome, módulo, pasta e
 tamanho em bytes; páginas sempre None, pois o diagnóstico não conta páginas),
-mais dois casos sintéticos (um que depende de páginas e um indefinido).
+mais casos sintéticos (páginas, indefinido, camada de módulo por categoria e
+palavras inteiras).
 """
 
 import sys
@@ -54,6 +55,16 @@ CASES = [
     ("Compilado geral de conteudo", None, None, 500000, 400, "livros"),
     # Nome neutro, sem módulo, pequeno e sem páginas -> indefinido.
     ("Arquivo avulso sem categoria", None, "course files", 120000, None, "indefinido"),
+
+    # --- Camada de módulo por categoria ---
+    ("resolucao.pdf", "Atividade de Entrega", "course files", 200000, None, "listas"),
+    ("especificacao.pdf", "Trabalho do Curso", "course files", 200000, None, "trabalho"),
+    # Módulo neutro não decide: cai até "indefinido".
+    ("material.pdf", "Qualidade", "course files", 200000, None, "indefinido"),
+
+    # --- Palavras inteiras: "aps" não pode casar dentro de outra palavra ---
+    ("etapas do projeto.pdf", None, "course files", 200000, None, "indefinido"),
+    ("mapas conceituais.pdf", None, "course files", 200000, None, "indefinido"),
 ]
 
 

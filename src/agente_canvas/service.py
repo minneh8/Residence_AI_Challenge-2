@@ -19,12 +19,16 @@ from canvasapi.exceptions import CanvasException, InvalidAccessToken, Unauthoriz
 
 from src.state import CanvasCourse
 
-# URL padrão quando CANVAS_API_URL não está definida no .env.
-CANVAS_API_URL_PADRAO = "https://canvas.instructure.com"
-
 # Mensagem única para token ausente ou inválido (401).
 MSG_TOKEN_INVALIDO = (
     "Token do Canvas ausente ou inválido. Confira CANVAS_API_KEY no .env"
+)
+
+# Não há URL padrão: canvas.instructure.com não é a instância da instituição e
+# responde 503, o que caía no modo offline sem explicar a causa.
+MSG_URL_AUSENTE = (
+    "CANVAS_API_URL não definido. Informe no .env a URL da instituição "
+    "(ex.: https://<instituicao>.instructure.com)"
 )
 
 # Esperas (em segundos) entre as retentativas quando o Canvas está indisponível
@@ -40,6 +44,11 @@ _CARACTERES_INVALIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 class CanvasAuthError(Exception):
     """Token do Canvas ausente ou inválido (401). Encerra sem modo offline."""
+
+
+class CanvasConfigError(CanvasAuthError):
+    """Configuração do Canvas ausente (ex.: CANVAS_API_URL). Encerra sem modo
+    offline, pelo mesmo caminho do erro de token."""
 
 
 class CanvasUnavailableError(Exception):
@@ -67,13 +76,13 @@ class CanvasService:
         raw_dir: str = "data/raw",
         processed_dir: str = "data/processed",
     ):
-        self.api_url = (
-            api_url or os.getenv("CANVAS_API_URL") or CANVAS_API_URL_PADRAO
-        ).rstrip("/")
+        self.api_url = (api_url or os.getenv("CANVAS_API_URL") or "").strip().rstrip("/")
         self.api_key = api_key or os.getenv("CANVAS_API_KEY")
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path(processed_dir)
 
+        if not self.api_url:
+            raise CanvasConfigError(MSG_URL_AUSENTE)
         if not self.api_key:
             raise CanvasAuthError(MSG_TOKEN_INVALIDO)
 
