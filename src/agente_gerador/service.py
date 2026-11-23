@@ -5,7 +5,7 @@ Fluxo de gerar_questoes():
     buscar trechos no RAG
     -> o RAG não devolveu nada (curso não indexado): "sem_material"
     -> descartar os fracos (score < SCORE_MINIMO); nenhum sobrou: "sem_material"
-    -> chamar o LLM -> validar a saída no código -> "ok"
+    -> chamar o LLM -> validar a saída no código -> embaralhar as alternativas -> "ok"
     -> o LLM respondeu {"sem_material": true, "questoes": []}: "sem_material"
     -> saída inválida ou falha da API: uma nova tentativa; duas falhas: "erro"
 
@@ -16,6 +16,8 @@ como parâmetros (buscar e chamar_llm). Só chamar_groq() fala com a internet.
 import json
 import logging
 import os
+import random
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +30,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from src.rag import buscar as buscar_no_rag
 
-from .models import Questao, ResultadoGeracao
+from .models import LETRAS, Questao, QuestaoMultiplaEscolha, ResultadoGeracao
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,11 @@ MENSAGEM_LLM_RECUSOU = (
 MENSAGEM_ERRO = "Não consegui gerar as questões agora. Tente de novo em alguns minutos."
 
 _validar_questao = TypeAdapter(Questao).validate_python
+
+# Questões cujas alternativas dependem da posição das outras ("nenhuma das anteriores",
+# "alternativa A"): embaralhar quebraria o sentido. "alternativa" ignora maiúsculas, a
+# letra não, para "a alternativa a ser escolhida" não contar.
+_DEPENDE_DA_ORDEM = re.compile(r"(?i:anteriores)|(?i:\balternativas?)\s+[A-D]\b")
 
 
 @dataclass(frozen=True)
@@ -179,6 +186,38 @@ def validar_saida(
     return questoes
 
 
+def depende_da_ordem(questao: QuestaoMultiplaEscolha) -> bool:
+    """True se o enunciado ou alguma alternativa fala em "anteriores" ou em "alternativa X"."""
+    textos = [questao.enunciado, *questao.alternativas.values()]
+    return any(_DEPENDE_DA_ORDEM.search(texto) for texto in textos)
+
+
+def embaralhar_alternativas(questoes: Sequence[Questao], rng: random.Random) -> list[Questao]:
+    """Sorteia a ordem das alternativas de cada múltipla escolha e remapeia a correta.
+
+    O LLM tende a pôr a correta sempre nas mesmas letras; o sorteio no código tira
+    esse viés. As dissertativas e as questões que dependem da ordem (ver
+    depende_da_ordem) ficam como vieram, sem nova tentativa. O rng entra como
+    parâmetro para os testes usarem uma semente fixa.
+    """
+    resultado = []
+    for questao in questoes:
+        if not isinstance(questao, QuestaoMultiplaEscolha):
+            resultado.append(questao)
+            continue
+        if depende_da_ordem(questao):
+            logger.info("Gerador de questões: %s fica na ordem original", questao.id)
+            resultado.append(questao)
+            continue
+        ordem = list(LETRAS)
+        rng.shuffle(ordem)  # ordem[i] = letra antiga que vai para a posição LETRAS[i]
+        alternativas = {nova: questao.alternativas[antiga] for nova, antiga in zip(LETRAS, ordem)}
+        correta = LETRAS[ordem.index(questao.correta)]
+        embaralhada = {"alternativas": alternativas, "correta": correta}
+        resultado.append(questao.model_copy(update=embaralhada))
+    return resultado
+
+
 def chamar_groq(mensagens: list[dict]) -> RespostaLLM:
     """Chama o modelo no Groq pelo ChatGroq (langchain-groq), como o Tutor.
 
@@ -227,6 +266,7 @@ def gerar_questoes(
     *,
     buscar: Buscar = buscar_no_rag,
     chamar_llm: ChamarLLM = chamar_groq,
+    rng: random.Random | None = None,
 ) -> ResultadoGeracao:
     """Gera questões sobre o tema a partir do material da disciplina.
 
@@ -237,6 +277,8 @@ def gerar_questoes(
         tipos: tipos permitidos, "multipla_escolha" e/ou "dissertativa".
         buscar: busca do RAG; os testes passam uma falsa.
         chamar_llm: chamada ao LLM; os testes passam uma falsa.
+        rng: sorteio da ordem das alternativas; None usa um random.Random novo.
+            Os testes passam random.Random(semente) para o resultado se repetir.
 
     Returns:
         ResultadoGeracao com status "ok", "sem_material" ou "erro".
@@ -271,6 +313,7 @@ def gerar_questoes(
                 status="sem_material",
                 mensagem=MENSAGEM_LLM_RECUSOU.format(tema=tema, quantidade=quantidade),
             )
+        questoes = embaralhar_alternativas(questoes, rng or random.Random())
         return ResultadoGeracao(status="ok", questoes=questoes)
     return ResultadoGeracao(status="erro", mensagem=MENSAGEM_ERRO)
 

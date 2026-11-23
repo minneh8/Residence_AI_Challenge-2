@@ -49,7 +49,10 @@ def test_script_mostra_as_questoes(capsys):
     saida = capsys.readouterr().out
     assert codigo == 0
     assert "status: ok" in saida
-    assert "* B)" in saida  # a alternativa correta aparece marcada
+    marcadas = [linha for linha in saida.splitlines() if linha.startswith("   * ")]
+    # Só a correta aparece marcada; a letra muda com o sorteio, o texto não (era a B).
+    assert len(marcadas) == 1
+    assert marcadas[0].endswith("Opção B da questão 1")
     assert "fonte: aula_exemplo_01.pdf, p. 3" in saida
     assert len(llm.chamadas) == 1
 

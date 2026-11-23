@@ -47,7 +47,7 @@ def questao_multipla(numero: int = 1, trecho: dict | None = None, **mudancas) ->
         "id": f"q{numero}",
         "tipo": "multipla_escolha",
         "enunciado": f"Pergunta de múltipla escolha número {numero}?",
-        "alternativas": {letra: f"Alternativa {letra} da questão {numero}" for letra in "ABCD"},
+        "alternativas": {letra: f"Opção {letra} da questão {numero}" for letra in "ABCD"},
         "correta": "B",
         "assunto": "overfitting",
         "trecho_referencia": referencia(trecho or TRECHOS[0]),
