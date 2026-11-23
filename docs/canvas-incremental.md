@@ -126,6 +126,33 @@ Todos os arquivos estão na pasta `course files`.
 - `scripts/classificar_logs.py` aplica o classificador a todos os PDFs dos logs
   `data/logs/diagnostico_<curso>.json` e destaca os indefinidos.
 
+### Classificação dos 22 PDFs dos 3 cursos
+
+Diagnóstico refeito em 23/11 com o host certo (`CANVAS_API_URL` da instituição),
+seguido de `scripts/classificar_logs.py 93527 93511 93532` (páginas = None). Os 3
+cursos têm **22 PDFs**, exatamente os 22 casos reais do teste. O restante de 93511 e
+93532 é `.docx`/`.pptx`, que fica fora do download.
+
+| arquivo | curso | categoria | origem |
+|---|---|---|---|
+| aula00.pdf … aula08.pdf (9) | 93527 | slides | modulo:aula |
+| ex_aula_semana6.pdf | 93527 | listas | nome:ex_ |
+| ex_aula03.pdf | 93527 | listas | nome:ex_ |
+| lista_exercicios_01.pdf | 93527 | listas | nome:lista |
+| PUCCampinas_MCEQ_RoteiroTrabalhoFinal.pdf | 93527 | trabalho | nome:roteiro |
+| APS GESTAO DE RISCO GP.pdf | 93511 | trabalho | nome:aps |
+| guia-pmbok-7-portugues.pdf | 93511 | livros | nome:pmbok |
+| **Material de Apoio GP - ENG_SOFT.pdf** | 93511 | **indefinido** | nenhuma |
+| modelo Gestao de risco.pdf | 93511 | trabalho | nome:modelo |
+| pmbok-6-portugues.pdf | 93511 | livros | nome:pmbok |
+| A1 - Apresentação Disciplina 2026-2.pdf | 93532 | slides | modulo:aula |
+| A2 - Evolução de Software e Leis de Lehman.pdf | 93532 | slides | modulo:aula |
+| A3 - Tipos de Manutenção de Software.pdf | 93532 | slides | modulo:aula |
+| Engenharia_de_Software_7ed_PRESSMAN (1)_compressed.pdf | 93532 | livros | nome:edicao |
+
+**Só "Material de Apoio GP - ENG_SOFT.pdf" vai para a camada de LLM.** Os outros 21
+são decididos pelas regras.
+
 ### Próxima etapa: camada de LLM
 
 - Acrescentar uma **camada de LLM** para os casos `indefinido`: entrada = **texto das 3
