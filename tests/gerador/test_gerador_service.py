@@ -29,6 +29,7 @@ from prompts.agente_gerador_prompts import (
 from src.agente_gerador import service
 from src.agente_gerador.models import QuestaoDissertativa, QuestaoMultiplaEscolha
 from src.agente_gerador.service import (
+    SCORE_MINIMO,
     RespostaLLM,
     SaidaInvalida,
     gerar_questoes,
@@ -357,17 +358,30 @@ def test_trechos_abaixo_do_limiar_nao_vao_para_o_llm(buscar):
 
 def test_selecionar_trechos_filtra_desduplica_e_ordena():
     trechos = [
-        {"texto": "a", "arquivo": "x.pdf", "pagina": 1, "score": 0.6},
+        {"texto": "a", "arquivo": "x.pdf", "pagina": 1, "score": 0.85},
         {"texto": "b", "arquivo": "x.pdf", "pagina": 1, "score": 0.9},  # mesma página, maior score
-        {"texto": "c", "arquivo": "y.pdf", "pagina": 2, "score": 0.5},  # no limiar: fica
+        {"texto": "c", "arquivo": "y.pdf", "pagina": 2, "score": SCORE_MINIMO},  # no limiar: fica
         {"texto": "   ", "arquivo": "z.pdf", "pagina": 3, "score": 0.95},  # texto vazio
-        {"texto": "d", "arquivo": "w.pdf", "pagina": 4, "score": 0.49},  # abaixo do limiar
+        {"texto": "d", "arquivo": "w.pdf", "pagina": 4, "score": SCORE_MINIMO - 0.01},  # abaixo
     ]
     selecionados = selecionar_trechos(trechos)
     assert [(t["arquivo"], t["texto"]) for t in selecionados] == [("x.pdf", "b"), ("y.pdf", "c")]
 
 
-@pytest.mark.parametrize(("quantidade", "k"), [(1, 5), (5, 5), (8, 8), (10, 10)])
+def test_selecionar_trechos_tira_o_mesmo_texto_vindo_de_outro_arquivo():
+    trechos = [
+        {"texto": "Camadas do modelo", "arquivo": "copia.pdf", "pagina": 2, "score": 0.87},
+        {"texto": "camadas  do\nmodelo", "arquivo": "original.pdf", "pagina": 2, "score": 0.88},
+        {"texto": "Outro conteúdo", "arquivo": "copia.pdf", "pagina": 3, "score": 0.80},
+    ]
+    selecionados = selecionar_trechos(trechos)
+    assert [(t["arquivo"], t["pagina"]) for t in selecionados] == [
+        ("original.pdf", 2),  # o repetido de maior score fica
+        ("copia.pdf", 3),
+    ]
+
+
+@pytest.mark.parametrize(("quantidade", "k"), [(1, 10), (5, 10), (10, 10)])
 def test_k_do_rag_acompanha_a_quantidade(quantidade, k):
     buscar = BuscarFalso([])  # sem material: aqui só interessa a chamada ao RAG
     gerar(buscar, LLMFalso(), quantidade=quantidade)

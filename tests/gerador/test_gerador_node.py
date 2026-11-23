@@ -55,7 +55,7 @@ def test_no_grava_as_questoes_e_o_status(monkeypatch):
     assert len(saida["generated_questions"]) == 5
     assert all(isinstance(q, dict) for q in saida["generated_questions"])
     assert saida["generated_questions"][0]["trecho_referencia"]["texto"] == TRECHOS[0]["texto"]
-    assert buscar.chamadas == [{"pergunta": "overfitting", "course_id": 42, "k": 5}]
+    assert buscar.chamadas == [{"pergunta": "overfitting", "course_id": 42, "k": service.K_MINIMO}]
 
 
 @pytest.mark.parametrize(

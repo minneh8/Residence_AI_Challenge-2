@@ -35,12 +35,15 @@ from .models import LETRAS, Questao, QuestaoMultiplaEscolha, ResultadoGeracao
 logger = logging.getLogger(__name__)
 
 TETO_QUESTOES = 10
-# Provisório. O RAG usa similaridade de cosseno do modelo E5, que costuma ficar
-# entre 0.7 e 1.0 mesmo para texto sem relação com o tema: com 0.5, o status
-# "sem_material" quase nunca acontece. Calibrar com a dupla do RAG usando
-# avaliacao/perguntas.json.
-SCORE_MINIMO = 0.5
-K_MINIMO = 5  # trechos pedidos ao RAG: max(K_MINIMO, quantidade)
+# Rede de segurança, não o filtro principal: quem decide se o material sustenta as
+# questões é o LLM (sem_material). Medido no curso 94256 (scripts/medir_scores_temas.py),
+# o score top-1 do E5 ficou entre 0.852 e 0.903 para 10 temas da disciplina e entre
+# 0.827 e 0.850 para 6 temas de outra: o score sozinho não separa os dois grupos.
+# 0.80 fica abaixo de todos os temas medidos e só barra trechos claramente distantes.
+SCORE_MINIMO = 0.80
+# Trechos pedidos ao RAG: max(K_MINIMO, quantidade). Era 5; com slides, cada página tem
+# poucas linhas e 5 trechos não sustentavam nem 2 questões (medido no curso 94256).
+K_MINIMO = 10
 TIPOS_VALIDOS = ("multipla_escolha", "dissertativa")
 TENTATIVAS = 2  # a primeira chamada e uma nova tentativa
 
@@ -95,17 +98,26 @@ def selecionar_trechos(trechos: Sequence[dict], limiar: float = SCORE_MINIMO) ->
     """Escolhe os trechos que servem de material para as questões.
 
     Descarta os de score abaixo do limiar e os de texto vazio. Se dois trechos
-    tiverem o mesmo (arquivo, pagina), fica o de maior score. A ordem final é
-    por score decrescente.
+    tiverem o mesmo (arquivo, pagina) ou o mesmo texto (o mesmo slide em dois
+    PDFs, por exemplo), fica o de maior score. A ordem final é por score
+    decrescente.
     """
-    melhores: dict[tuple[str, int], dict] = {}
-    for trecho in trechos:
-        if trecho["score"] < limiar or not str(trecho["texto"]).strip():
+    validos = [t for t in trechos if t["score"] >= limiar and str(t["texto"]).strip()]
+    escolhidos, paginas_vistas, textos_vistos = [], set(), set()
+    for trecho in sorted(validos, key=lambda t: t["score"], reverse=True):
+        pagina = (trecho["arquivo"], trecho["pagina"])
+        texto = _texto_normalizado(trecho["texto"])
+        if pagina in paginas_vistas or texto in textos_vistos:
             continue
-        chave = (trecho["arquivo"], trecho["pagina"])
-        if chave not in melhores or trecho["score"] > melhores[chave]["score"]:
-            melhores[chave] = trecho
-    return sorted(melhores.values(), key=lambda t: t["score"], reverse=True)
+        paginas_vistas.add(pagina)
+        textos_vistos.add(texto)
+        escolhidos.append(trecho)
+    return escolhidos
+
+
+def _texto_normalizado(texto: str) -> str:
+    """Texto sem diferença de maiúsculas e de espaços, para achar trechos repetidos."""
+    return " ".join(str(texto).split()).casefold()
 
 
 def montar_mensagens(

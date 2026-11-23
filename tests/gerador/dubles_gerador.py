@@ -20,21 +20,21 @@ TRECHOS = [
         "arquivo": "aula_ficticia_01.pdf",
         "pagina": 5,
         "pagina_fim": 6,  # trecho que ocupa duas páginas
-        "score": 0.84,
+        "score": 0.87,
     },
     {
         "texto": "A regularização L2 penaliza pesos grandes para reduzir a variância do modelo.",
         "arquivo": "aula_ficticia_02.pdf",
         "pagina": 2,
         "pagina_fim": 2,
-        "score": 0.77,
+        "score": 0.83,
     },
     {
         "texto": "Apresentação do curso e critérios de avaliação.",
         "arquivo": "aula_ficticia_00.pdf",
         "pagina": 1,
         "pagina_fim": 1,
-        "score": 0.31,  # abaixo de SCORE_MINIMO: deve ser descartado
+        "score": 0.62,  # abaixo de SCORE_MINIMO: deve ser descartado
     },
 ]
 TRECHO_FRACO = TRECHOS[3]
