@@ -9,27 +9,44 @@ from typing import Any
 
 from src.state import GlauxState
 
-from .service import gerar_questoes
+from .service import TETO_QUESTOES, gerar_questoes
 
 MENSAGEM_SEM_ALVO = "Não consegui gerar questões: faltou escolher o tema ou a disciplina."
+MENSAGEM_QUANTIDADE_INVALIDA = (
+    f"Não consegui gerar questões: a quantidade deve ser um número de 1 a {TETO_QUESTOES}."
+)
 
 
 def gerador_questoes_node(state: GlauxState) -> dict[str, Any]:
-    """Gera questões sobre state.target_subject na disciplina state.target_course_id.
+    """Gera state.quantidade_questoes questões sobre state.tema no curso state.curso_alvo.
 
-    Grava generated_questions (lista de dicts), generation_status e
-    generation_message. Sem tema ou sem disciplina, grava "erro" e não chama
-    nem o RAG nem o LLM. A quantidade é a padrão de gerar_questoes (5).
+    Sem quantidade_questoes (o aluno não pediu --questoes), devolve {}: o estado
+    não muda e nem o RAG nem o LLM são chamados. Com a quantidade, grava
+    generated_questions (lista de dicts), generation_status e generation_message.
+    Sem tema, sem curso ou com quantidade fora de 1 a TETO_QUESTOES, grava
+    "erro" e não chama nada. A CLI já barra a quantidade; esta conferência
+    protege quem chama o nó por fora dela, sem derrubar a esteira.
     """
-    tema = (state.target_subject or "").strip()
-    if not tema or state.target_course_id is None:
+    if state.quantidade_questoes is None:
+        return {}
+
+    tema = (state.tema or "").strip()
+    if not tema or state.curso_alvo is None:
         return {
             "generated_questions": [],
             "generation_status": "erro",
             "generation_message": MENSAGEM_SEM_ALVO,
         }
 
-    resultado = gerar_questoes(tema, state.target_course_id)
+    quantidade = state.quantidade_questoes
+    if isinstance(quantidade, bool) or not 1 <= quantidade <= TETO_QUESTOES:
+        return {
+            "generated_questions": [],
+            "generation_status": "erro",
+            "generation_message": MENSAGEM_QUANTIDADE_INVALIDA,
+        }
+
+    resultado = gerar_questoes(tema, state.curso_alvo, quantidade)
     return {
         "generated_questions": [questao.model_dump() for questao in resultado.questoes],
         "generation_status": resultado.status,

@@ -22,7 +22,7 @@ from src.state import GlauxState
 
 
 def cinco_questoes():
-    """Resposta válida para a quantidade padrão do nó (5 questões)."""
+    """Resposta válida para um pedido de 5 questões."""
     return resposta(
         questao_multipla(1, TRECHOS[0]),
         questao_dissertativa(2, TRECHOS[1]),
@@ -45,7 +45,9 @@ def test_no_grava_as_questoes_e_o_status(monkeypatch):
     buscar, llm = BuscarFalso(TRECHOS), LLMFalso(cinco_questoes())
     trocar_dependencias(monkeypatch, buscar, llm)
 
-    saida = node.gerador_questoes_node(estado(target_subject="overfitting", target_course_id=42))
+    saida = node.gerador_questoes_node(
+        estado(tema="overfitting", curso_alvo=42, quantidade_questoes=5)
+    )
 
     assert set(saida) == {"generated_questions", "generation_status", "generation_message"}
     assert saida["generation_status"] == "ok"
@@ -59,9 +61,9 @@ def test_no_grava_as_questoes_e_o_status(monkeypatch):
 @pytest.mark.parametrize(
     "campos",
     [
-        {"target_subject": None, "target_course_id": 42},
-        {"target_subject": "   ", "target_course_id": 42},
-        {"target_subject": "overfitting", "target_course_id": None},
+        {"tema": None, "curso_alvo": 42},
+        {"tema": "   ", "curso_alvo": 42},
+        {"tema": "overfitting", "curso_alvo": None},
         {},
     ],
 )
@@ -69,7 +71,7 @@ def test_no_sem_tema_ou_disciplina_nao_chama_nada(monkeypatch, campos):
     buscar, llm = BuscarFalso(TRECHOS), LLMFalso()
     trocar_dependencias(monkeypatch, buscar, llm)
 
-    saida = node.gerador_questoes_node(estado(**campos))
+    saida = node.gerador_questoes_node(estado(quantidade_questoes=5, **campos))
 
     assert saida == {
         "generated_questions": [],
@@ -80,11 +82,52 @@ def test_no_sem_tema_ou_disciplina_nao_chama_nada(monkeypatch, campos):
     assert llm.chamadas == []
 
 
+def test_no_sem_quantidade_nao_muda_o_estado(monkeypatch):
+    buscar, llm = BuscarFalso(TRECHOS), LLMFalso()
+    trocar_dependencias(monkeypatch, buscar, llm)
+
+    saida = node.gerador_questoes_node(estado(tema="overfitting", curso_alvo=42))
+
+    assert saida == {}
+    assert buscar.chamadas == []
+    assert llm.chamadas == []
+
+
+@pytest.mark.parametrize("quantidade", [0, -1, service.TETO_QUESTOES + 1])
+def test_no_com_quantidade_fora_do_limite_grava_erro(monkeypatch, quantidade):
+    buscar, llm = BuscarFalso(TRECHOS), LLMFalso()
+    trocar_dependencias(monkeypatch, buscar, llm)
+
+    saida = node.gerador_questoes_node(
+        estado(tema="overfitting", curso_alvo=42, quantidade_questoes=quantidade)
+    )
+
+    assert saida == {
+        "generated_questions": [],
+        "generation_status": "erro",
+        "generation_message": node.MENSAGEM_QUANTIDADE_INVALIDA,
+    }
+    assert buscar.chamadas == []
+    assert llm.chamadas == []
+
+
+def test_no_repassa_a_quantidade_pedida(monkeypatch):
+    duas = resposta(questao_multipla(1, TRECHOS[0]), questao_dissertativa(2, TRECHOS[1]))
+    trocar_dependencias(monkeypatch, BuscarFalso(TRECHOS), LLMFalso(duas))
+
+    saida = node.gerador_questoes_node(
+        estado(tema="overfitting", curso_alvo=42, quantidade_questoes=2)
+    )
+
+    assert saida["generation_status"] == "ok"
+    assert len(saida["generated_questions"]) == 2
+
+
 def test_no_repassa_sem_material(monkeypatch):
     llm = LLMFalso()
     trocar_dependencias(monkeypatch, BuscarFalso([TRECHO_FRACO]), llm)
 
-    saida = node.gerador_questoes_node(estado(target_subject="grafos", target_course_id=42))
+    saida = node.gerador_questoes_node(estado(tema="grafos", curso_alvo=42, quantidade_questoes=5))
 
     assert saida["generation_status"] == "sem_material"
     assert saida["generated_questions"] == []
@@ -99,8 +142,8 @@ def test_no_funciona_dentro_de_um_grafo_langgraph(monkeypatch):
     grafo.add_node("gerador_questoes", node.gerador_questoes_node)
     grafo.add_edge(START, "gerador_questoes")
     grafo.add_edge("gerador_questoes", END)
-    final = grafo.compile().invoke(estado(target_subject="overfitting", target_course_id=42))
+    final = grafo.compile().invoke(estado(tema="overfitting", curso_alvo=42, quantidade_questoes=5))
 
     assert final["generation_status"] == "ok"
     assert len(final["generated_questions"]) == 5
-    assert final["target_subject"] == "overfitting"  # o resto do estado continua lá
+    assert final["tema"] == "overfitting"  # o resto do estado continua lá
