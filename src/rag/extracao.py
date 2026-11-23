@@ -17,6 +17,7 @@ Páginas curtas ou vazias são mantidas aqui; o descarte é feito no chunking.
 
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 import pymupdf
@@ -26,6 +27,23 @@ logger = logging.getLogger(__name__)
 # Raiz do repositório (src/rag/extracao.py -> parents[2]).
 RAIZ_REPO = Path(__file__).resolve().parents[2]
 DIR_RAW = RAIZ_REPO / "data" / "raw"
+
+# Arquivos cujo nome normalizado (minúsculas, sem acentos) contenha algum destes
+# padrões são tratados como material de apoio (listas, exercícios, roteiros) e
+# NÃO entram no índice. Eles continuam em data/raw/; só não são indexados.
+PADROES_NAO_CONTEUDO = ("lista", "exercicio", "ex_", "roteiro")
+
+
+def _normalizar_nome(nome: str) -> str:
+    """Minúsculas e sem acentos, para casar com PADROES_NAO_CONTEUDO."""
+    decomposto = unicodedata.normalize("NFKD", nome.casefold())
+    return "".join(c for c in decomposto if not unicodedata.combining(c))
+
+
+def eh_nao_conteudo(nome: str) -> bool:
+    """True se o nome do arquivo bate com algum padrão de material de apoio."""
+    normalizado = _normalizar_nome(nome)
+    return any(padrao in normalizado for padrao in PADROES_NAO_CONTEUDO)
 
 # Espaços "exóticos" que viram espaço comum (NBSP, espaços finos, etc.).
 _ESPACOS_UNICODE = re.compile(r"[  -   　]")
@@ -80,7 +98,11 @@ def remover_rodape_numeracao(texto: str) -> str:
 
 
 def listar_pdfs(course_id: int) -> list[Path]:
-    """Lista, em ordem alfabética, os PDFs de data/raw/<course_id>/.
+    """Lista, em ordem alfabética, os PDFs de conteúdo de data/raw/<course_id>/.
+
+    Arquivos de apoio (ver PADROES_NAO_CONTEUDO: listas, exercícios, roteiros)
+    são descartados da indexação e registrados no log; os arquivos continuam
+    em data/raw/, apenas não entram no índice.
 
     Raises:
         FileNotFoundError: se a pasta do curso não existir.
@@ -88,10 +110,18 @@ def listar_pdfs(course_id: int) -> list[Path]:
     pasta = DIR_RAW / str(course_id)
     if not pasta.is_dir():
         raise FileNotFoundError(f"Pasta do curso não encontrada: {pasta}")
-    return sorted(
+    todos = sorted(
         (p for p in pasta.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"),
         key=lambda p: p.name.lower(),
     )
+    conteudo = [p for p in todos if not eh_nao_conteudo(p.name)]
+    ignorados = [p for p in todos if eh_nao_conteudo(p.name)]
+    if ignorados:
+        logger.info(
+            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexação: %s",
+            course_id, len(ignorados), ", ".join(p.name for p in ignorados),
+        )
+    return conteudo
 
 
 def extrair_pdf(caminho: Path, course_id: int) -> list[dict]:

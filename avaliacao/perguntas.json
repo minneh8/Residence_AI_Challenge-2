@@ -8,7 +8,7 @@
     "respostas": [
       {"arquivo": "aula01.pdf", "paginas": [17]}
     ],
-    "status": "sugerida"
+    "status": "confirmada"
   },
   {
     "id": "q02",
@@ -20,7 +20,7 @@
       {"arquivo": "aula01.pdf", "paginas": [17, 36]},
       {"arquivo": "aula03.pdf", "paginas": [31]}
     ],
-    "status": "sugerida"
+    "status": "confirmada"
   },
   {
     "id": "q03",
@@ -42,7 +42,7 @@
     "respostas": [
       {"arquivo": "aula03.pdf", "paginas": [15]}
     ],
-    "status": "sugerida"
+    "status": "confirmada"
   },
   {
     "id": "q07",
@@ -64,7 +64,7 @@
     "respostas": [
       {"arquivo": "aula02.pdf", "paginas": [11]}
     ],
-    "status": "sugerida"
+    "status": "confirmada"
   },
   {
     "id": "q10",
@@ -110,17 +110,6 @@
     "respostas": [
       {"arquivo": "aula02.pdf", "paginas": [18]},
       {"arquivo": "aula03.pdf", "paginas": [23]}
-    ],
-    "status": "sugerida"
-  },
-  {
-    "id": "q15",
-    "pergunta": "Para que serve a aleatorização em um experimento?",
-    "course_id": 93527,
-    "tipo": "direta",
-    "origem": "lista1-q9",
-    "respostas": [
-      {"arquivo": "aula02.pdf", "paginas": [41]}
     ],
     "status": "sugerida"
   },
@@ -185,17 +174,6 @@
     "status": "sugerida"
   },
   {
-    "id": "q28",
-    "pergunta": "Quando é melhor fazer um estudo de caso em vez de um experimento?",
-    "course_id": 93527,
-    "tipo": "parafrase",
-    "origem": "material",
-    "respostas": [
-      {"arquivo": "aula01.pdf", "paginas": [28, 29, 32]}
-    ],
-    "status": "sugerida"
-  },
-  {
     "id": "q29",
     "pergunta": "O que é uma variável moderadora?",
     "course_id": 93527,
@@ -216,7 +194,7 @@
     "respostas": [
       {"arquivo": "aula03.pdf", "paginas": [18]}
     ],
-    "status": "sugerida"
+    "status": "confirmada"
   },
   {
     "id": "q31",

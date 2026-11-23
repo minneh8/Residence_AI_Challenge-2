@@ -25,10 +25,12 @@ from .indexacao import obter_colecao
 
 logger = logging.getLogger(__name__)
 
-# PROVISÓRIO: coleção usada por buscar(). rag_j3_s1 = chunks de 3 páginas com
-# 1 de sobreposição. A escolha definitiva depende da avaliação de recuperação
-# (Recall/MRR) entre as configurações, que ainda não foi feita.
-COLECAO_PADRAO = "rag_j3_s1"
+# Coleção usada por buscar(). rag_j1_s0 (A) = chunks de 1 página, sem
+# sobreposição. Escolhida pela avaliação (scripts/avaliar.py, curso 93527,
+# 18 perguntas com resposta): com k=5, A teve Recall@5 de 0,778 e MRR de
+# 0,657, contra 0,778 e 0,611 de rag_j3_s1 (B), e cita 1 página por resultado
+# (B cita cerca de 3,6). Com k=3, A também ficou à frente (0,778 contra 0,667).
+COLECAO_PADRAO = "rag_j1_s0"
 
 
 def _validar(pergunta: str, k: int) -> None:
