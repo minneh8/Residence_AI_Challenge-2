@@ -1,6 +1,7 @@
 # tests/test_agente_tutor.py
 import json
-import fitz
+import pymupdf
+import pytest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,7 +20,7 @@ def extrair_contexto_real_de_docs(limite_chars: int = 2500):
     contexto = []
     fontes = []
     for pdf in pdfs[:2]:
-        doc = fitz.open(str(pdf))
+        doc = pymupdf.open(str(pdf))
         texto = doc[0].get_text() if len(doc) > 0 else ""
         doc.close()
         if texto.strip():
@@ -79,6 +80,19 @@ def test_tutor_avisa_prazos_proximos_e_ignora_vencidos(tmp_path):
     assert cronograma[0].days_remaining <= 2
 
 
+CURSO_INDEXADO = 93527
+
+
+def _curso_indexado(course_id: int) -> bool:
+    try:
+        from src.rag.indexacao import curso_indexado
+        return curso_indexado(course_id)
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _curso_indexado(CURSO_INDEXADO),
+                    reason=f"curso {CURSO_INDEXADO} não está indexado em data/chroma/")
 @patch("src.agente_tutor.service.ChatGroq")
 def test_tutor_gera_resumo_usando_rag_com_pdfs_de_docs(mock_groq_cls):
     """
@@ -87,17 +101,22 @@ def test_tutor_gera_resumo_usando_rag_com_pdfs_de_docs(mock_groq_cls):
     """
     mock_llm = MagicMock()
     mock_resp = MagicMock()
+    # Cada frase cita a fonte: sem isso o Tutor pede uma reescrita (2ª chamada).
     mock_resp.content = (
-        "# 📌 Visão Geral da Aula\nResumo gerado com base no material da disciplina.\n\n"
-        "# 🔑 Conceitos-Chave e Definições\n- Conteúdo extraído dos PDFs reais."
+        "# 📌 Visão Geral da Aula\n"
+        "Resumo gerado com base no material da disciplina [aula03.pdf, p.15-15].\n\n"
+        "# 🔑 Conceitos-Chave e Definições\n"
+        "- Conteúdo extraído dos PDFs reais [aula03.pdf, p.15-15]."
     )
     mock_llm.invoke.return_value = mock_resp
     mock_groq_cls.return_value = mock_llm
 
     tutor = TutorService()
-    resumo = tutor.generate_summary_for_course(96829, "ESTUDOS DE BANCO DE DADOS I")
+    resumo = tutor.generate_summary_for_course(
+        CURSO_INDEXADO, "MÉTODOS DE COMPUTAÇÃO EXPERIMENTAL E QUANTITATIVA",
+        tema="hipótese nula")
 
-    assert resumo.course_id == 96829
+    assert resumo.course_id == CURSO_INDEXADO
     assert len(resumo.summary_text) > 0
     # Se houver fontes indexadas no RAG/data/raw para o curso 96829, valida que a LLM foi chamada
     if resumo.sources_used:

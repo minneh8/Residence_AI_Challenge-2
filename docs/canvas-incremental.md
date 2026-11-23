@@ -153,19 +153,86 @@ cursos têm **22 PDFs**, exatamente os 22 casos reais do teste. O restante de 93
 **Só "Material de Apoio GP - ENG_SOFT.pdf" vai para a camada de LLM.** Os outros 21
 são decididos pelas regras.
 
-### Próxima etapa: camada de LLM
+### Merge da origin/testes
 
-- Acrescentar uma **camada de LLM** para os casos `indefinido`: entrada = **texto das 3
-  primeiras páginas** + **nome, módulo, pasta e nº de páginas**; **categorias fechadas**
-  (as mesmas 5); saída em **JSON validado com pydantic**; **temperatura 0**. O resultado
-  é **salvo no catálogo** do curso para **nunca reclassificar** o mesmo arquivo.
-- Com isso, a **seção 5.1 da documentação deixa de dizer "não usa LLM"** (o classificador
-  passa a ser regras + fallback de LLM).
+- A `origin/testes` (Lucas) entrou na branch: testes do Canvas e do Tutor, remoção do
+  `converter.py` e contagem de páginas com `fitz`. A lógica de download dele (pastas
+  `conteudo/` e `listas/`, parada pelo nome) foi substituída na etapa 2, abaixo.
+
+## Etapa 2: catálogo, download incremental e LLM (23/11)
+
+### O que mudou
+
+- **`src/agente_canvas/catalogo.py`**: catálogo do curso (`_arquivos.json`, chaveado pelo
+  id do Canvas, com nome, nome_local, categoria, origem, updated_at, size, caminho,
+  paginas, modulo e baixado_em/migrado_em) e estado do aluno
+  (`data/canvas_state/<user_id>.json`). Toda gravação é atômica (`.tmp` + rename).
+- **`CanvasService.sincronizar_curso`** substitui `fetch_and_save_course_data`,
+  `CATEGORIAS_LISTAS`, `_classificar_e_mover_pdf` e `organizar_pdfs_existentes`:
+  - lista com `sort=updated_at&order=desc` e itera página a página (sem `list()`); para
+    no primeiro arquivo com `updated_at <= ultimo_updated_at` do aluno;
+  - sem estado ou com `--completo`, percorre tudo;
+  - mesmo id e `updated_at` no catálogo e arquivo no disco → só registra;
+  - senão baixa para `.part`, conta páginas, classifica e move para
+    `data/raw/<id>/<categoria>/<nome>` (`_<file_id>` no nome se outro id já usa o nome);
+  - atualização com o mesmo nome mantém a categoria (não chama a LLM de novo);
+  - `get_course`, `get_files`, `get_modules`, `get_assignments` e o download passam por
+    retentativas; 401 num curso vira aviso e o fluxo segue para o próximo curso.
+- **Migração**: PDFs fora do catálogo (soltos na raiz, em `conteudo/` ou `listas/` da
+  versão anterior) que casam pelo nome com a listagem do Canvas são movidos para a pasta
+  da categoria e registrados sem baixar. O modo offline não move mais arquivos.
+- **Índice**: `indexar_curso` só é chamado se algo mudou no curso (ou se o curso ainda
+  não está no índice). `listar_pdfs` é recursivo, o manifesto é chaveado pelo caminho
+  relativo e a metadata `categoria` é o nome da subpasta. `arquivo` e `chunk_id` não
+  mudaram.
+- `graph.py` ganhou `--completo`; `--curso <id>` continua sincronizando só esse curso.
+
+### Camada de LLM (`src/agente_canvas/classificador_llm.py`)
+
+- Só para os casos `indefinido` das regras. Groq, mesmo cliente e modelo do Tutor,
+  temperatura 0.
+- Entrada: texto das 3 primeiras páginas (até 4000 caracteres, via `extrair_pdf`) mais
+  nome, módulo e nº de páginas. Prompt curto com as categorias fechadas slides, listas,
+  trabalho, livros e outros, pedindo só JSON.
+- Validação com pydantic (`categoria` Literal, `confianca` 0–1, `justificativa`). JSON
+  inválido ou confiança < 0,6 → `outros`, com `origem` `llm:json_invalido` ou
+  `llm:confianca_baixa`. Aceito → `origem = "llm"`.
+- O resultado aceito e os casos `json_invalido`/`confianca_baixa` ficam no catálogo e não
+  são recalculados enquanto o `updated_at` não mudar.
+- **Erro da API (`llm:erro_api`) não grava no catálogo**: o PDF não é movido, o estado do
+  aluno não avança e o arquivo é tentado de novo na próxima sincronização (resumo:
+  `pendentes_llm`).
+- **Na prática, os 22 PDFs dos 3 cursos não chegam à LLM.** Com o download, as páginas são
+  contadas e "Material de Apoio GP - ENG_SOFT.pdf" (118 páginas) vira `livros` pela regra
+  `paginas>100`, como previsto. Forçando a LLM com
+  `scripts/testar_classificador_llm.py --curso 93511 --arquivo "..." --forcar-llm` (baixa
+  para uma pasta temporária e não grava nada), ela também respondeu `livros`, confiança
+  0,9, em 1,4 s e 650 tokens.
+- **Seção 5.1 da documentação**: deixa de dizer "não usa LLM". O agente Canvas passa a
+  usar LLM **só nesse fallback**, enviando **apenas material público do curso** (texto
+  inicial do arquivo, nome, módulo e nº de páginas), nunca dados do aluno.
+
+### Decisões tomadas na implementação
+
+- **Arquivo apagado do disco**: com parada antecipada, a listagem continua além do ponto
+  de parada até reencontrar todos os ids do catálogo que sumiram do disco. Numa varredura
+  completa, ids que sumiram do disco e não existem mais no Canvas saem do catálogo.
+- **Migração só em varredura completa** (primeira sincronização do aluno ou `--completo`).
+  Assim um PDF local sem par no Canvas não obriga a percorrer a lista toda em toda
+  execução; ele fica onde está e é avisado.
+- **Falha num arquivo** (não só interrupção) também impede gravar o estado, para a
+  próxima execução não parar antes dele.
+- O catálogo é gravado a cada arquivo; o estado, só no fim. Uma execução interrompida
+  retoma registrando o que já foi baixado e baixando o resto.
+- `pasta` não é usada na classificação (o classificador não tem camada de pasta e buscar
+  as pastas custaria mais uma requisição por curso).
+- `categoria` no índice é `raiz` para PDFs que ficaram soltos na pasta do curso.
+- A contagem por categoria do resumo é a do catálogo inteiro do curso, não só da execução.
 
 ## Decisões
 
-- **Classificação por camadas.** A primeira regra que decidir vale, nesta ordem: nome do arquivo (listas/trabalho/livros) → módulo → nome do arquivo (aula/slide) → número de páginas/tamanho → `indefinido` → LLM → `outros`. Não há camada de pasta: nenhum dos 3 cursos diagnosticados usa pastas (tudo fica em `course files`). As regras estão implementadas; a camada de LLM é a próxima etapa.
-- **Parada antecipada.** O agente lista com `sort=updated_at&order=desc` e compara **id + updated_at** com o catálogo. Ele para no primeiro arquivo que já está registrado com o mesmo `updated_at`.
+- **Classificação por camadas.** A primeira regra que decidir vale, nesta ordem: nome do arquivo (listas/trabalho/livros) → módulo → nome do arquivo (aula/slide) → número de páginas/tamanho → `indefinido` → LLM → `outros`. Não há camada de pasta: nenhum dos 3 cursos diagnosticados usa pastas (tudo fica em `course files`). Regras e LLM estão implementadas.
+- **Parada antecipada.** O agente lista com `sort=updated_at&order=desc` e para no primeiro arquivo com `updated_at <= ultimo_updated_at` do estado do aluno. Acima desse ponto, compara **id + updated_at** com o catálogo para decidir entre registrar e baixar.
 - **Catálogo por curso** em `data/raw/<course_id>/_arquivos.json`, chaveado pelo **id do Canvas**. Guarda nome, categoria, tamanho, datas, pasta, módulo e caminho local.
 - **Estado do aluno** em `data/canvas_state/<user_id>.json`, usando o id real de `get_current_user`.
 - **Trabalho é uma categoria própria**, separada de listas.
@@ -175,9 +242,10 @@ são decididos pelas regras.
 
 1. ~~Rodar o diagnóstico nos cursos 93511 e 93532.~~ Feito em 17/11.
 2. ~~Testar a ordenação entre páginas com `--per-page 5 --sort updated_at`.~~ Feito em 17/11.
-3. Refazer o diagnóstico dos 3 cursos (o Canvas estava fora em 23/11) e aplicar o classificador a todos os PDFs dos logs, para conferir quais ficam `indefinido`.
-4. Implementar a camada de LLM e depois o download incremental.
+3. ~~Refazer o diagnóstico dos 3 cursos e aplicar o classificador a todos os PDFs.~~ Feito em 23/11.
+4. ~~Implementar a camada de LLM e o download incremental.~~ Feito em 23/11 (etapa 2).
 5. O curso **96848** não pertence a esta conta. Ele só aparece no `COURSE_MAP_OFFLINE` de `node.py`.
+6. Próxima etapa: decidir o destino do `PADROES_NAO_CONTEUDO` agora que a categoria está na metadata dos chunks.
 
 ## Como recriar o ambiente
 

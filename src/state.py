@@ -42,4 +42,5 @@ class GlauxState(BaseModel):
     # Opções da linha de comando (ver src/graph.py).
     tema: Optional[str] = None            # --tema: consulta única do Tutor
     curso_alvo: Optional[int] = None      # --curso: restringe a esteira a um curso
+    sync_completo: bool = False           # --completo: ignora a parada antecipada do Canvas
     generated_questions: List[dict] = Field(default_factory=list)

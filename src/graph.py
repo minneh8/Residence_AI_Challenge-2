@@ -54,6 +54,10 @@ def main() -> int:
         "--curso", type=int, default=None,
         help="id do curso: roda a esteira (Canvas e Tutor) só nesse curso.",
     )
+    parser.add_argument(
+        "--completo", action="store_true",
+        help="percorre todos os arquivos do Canvas, sem a parada antecipada.",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -64,6 +68,7 @@ def main() -> int:
         canvas_api_key=os.getenv("CANVAS_API_KEY"),
         tema=args.tema,
         curso_alvo=args.curso,
+        sync_completo=args.completo,
     )
 
     print(" Executando esteira completa do Glaux...\n")

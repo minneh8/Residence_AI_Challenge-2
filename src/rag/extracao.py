@@ -97,51 +97,49 @@ def remover_rodape_numeracao(texto: str) -> str:
     return texto
 
 
-def listar_pdfs(course_id: int) -> list[Path]:
-    """Lista, em ordem alfabética, os PDFs de conteudo de data/raw/<course_id>/.
+def categoria_do_pdf(caminho: Path, course_id: int) -> str:
+    """Nome da subpasta de categoria do PDF (ex.: "slides"); "raiz" se estiver
+    solto direto em data/raw/<course_id>/."""
+    relativo = Path(caminho).resolve().relative_to((DIR_RAW / str(course_id)).resolve())
+    return relativo.parts[0] if len(relativo.parts) > 1 else "raiz"
 
-    Prioriza os PDFs ja triados pelo Agente Canvas em data/raw/<course_id>/conteudo/
-    e tambem considera PDFs soltos na raiz da disciplina (exceto os de apoio),
-    ignorando a subpasta listas/ (que e de uso do Agente Gerador).
+
+def listar_pdfs(course_id: int) -> list[Path]:
+    """Lista, em ordem alfabética de nome, os PDFs de conteúdo do curso.
+
+    Busca recursiva em data/raw/<course_id>/: as subpastas de categoria
+    (slides/, listas/, trabalho/, livros/, outros/) criadas pelo Agente Canvas
+    e também PDFs ainda soltos na raiz. Arquivos de apoio (ver
+    PADROES_NAO_CONTEUDO: listas, exercícios, roteiros) continuam fora da
+    indexação, pelo nome, e são registrados no log.
 
     Raises:
-        FileNotFoundError: se a pasta do curso nao existir.
+        FileNotFoundError: se a pasta do curso não existir.
     """
     pasta = DIR_RAW / str(course_id)
     if not pasta.is_dir():
-        raise FileNotFoundError(f"Pasta do curso nao encontrada: {pasta}")
-
-    pdfs_conteudo: list[Path] = []
-
-    # 1. Le tudo que o Agente Canvas ja classificou dentro de conteudo/
-    pasta_conteudo = pasta / "conteudo"
-    if pasta_conteudo.is_dir():
-        pdfs_conteudo.extend(
-            p for p in pasta_conteudo.rglob("*")
-            if p.is_file() and p.suffix.lower() == ".pdf"
-        )
-
-    # 2. Retrocompatibilidade: le PDFs soltos na raiz do curso que nao sejam de apoio
-    soltos_raiz = [
-        p for p in pasta.iterdir()
-        if p.is_file() and p.suffix.lower() == ".pdf"
-    ]
-    ignorados = [p for p in soltos_raiz if eh_nao_conteudo(p.name)]
+        raise FileNotFoundError(f"Pasta do curso não encontrada: {pasta}")
+    todos = sorted(
+        (p for p in pasta.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"),
+        key=lambda p: (p.name.lower(), str(p).lower()),
+    )
+    conteudo = [p for p in todos if not eh_nao_conteudo(p.name)]
+    ignorados = [p for p in todos if eh_nao_conteudo(p.name)]
     if ignorados:
         logger.info(
-            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexacao: %s",
+            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexação: %s",
             course_id, len(ignorados), ", ".join(p.name for p in ignorados),
         )
-    pdfs_conteudo.extend(p for p in soltos_raiz if not eh_nao_conteudo(p.name))
-
-    return sorted(pdfs_conteudo, key=lambda p: p.name.lower())
+    return conteudo
 
 
-def extrair_pdf(caminho: Path, course_id: int) -> list[dict]:
+def extrair_pdf(caminho: Path, course_id: int, max_paginas: int | None = None) -> list[dict]:
     """Extrai o texto de um PDF, com um item por página.
 
     Páginas sem texto também são retornadas (com texto vazio), para que a
     numeração fique completa e seja possível identificar onde falta OCR.
+    `max_paginas` limita a extração às primeiras páginas (usado pelo
+    classificador de LLM, que lê só o começo do arquivo).
 
     Raises:
         FileNotFoundError: se o arquivo não existir.
@@ -157,6 +155,8 @@ def extrair_pdf(caminho: Path, course_id: int) -> list[dict]:
         if doc.needs_pass:
             raise ValueError(f"PDF protegido por senha: {caminho.name}")
         for numero, pagina in enumerate(doc, start=1):
+            if max_paginas is not None and numero > max_paginas:
+                break
             itens.append({
                 "texto": remover_rodape_numeracao(limpar_texto(pagina.get_text("text"))),
                 "arquivo": caminho.name,

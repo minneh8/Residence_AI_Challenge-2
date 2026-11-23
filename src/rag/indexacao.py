@@ -7,7 +7,11 @@ as coleções usam distância de cosseno.
 Em cada coleção:
     id          chunk_id (ver chunking.gerar_chunks)
     documento   texto do chunk, SEM o prefixo "passage: "
-    metadados   arquivo, pagina, pagina_fim, course_id, caracteres
+    metadados   arquivo, pagina, pagina_fim, course_id, caracteres, categoria
+
+"arquivo" é só o nome do PDF (sem pasta) e o chunk_id não muda de formato.
+"categoria" é o nome da subpasta onde o PDF está (slides, listas, trabalho,
+livros, outros) ou "raiz" se o PDF ainda estiver solto na pasta do curso.
 
 Reindexar um curso apaga antes os chunks daquele course_id na coleção,
 então rodar a indexação de novo não duplica nada.
@@ -21,7 +25,7 @@ from pathlib import Path
 
 from .chunking import filtrar_paginas, gerar_chunks
 from .embeddings import embeddings_passages
-from .extracao import extrair_curso, listar_pdfs
+from .extracao import DIR_RAW, categoria_do_pdf, extrair_curso, listar_pdfs
 
 logger = logging.getLogger(__name__)
 
@@ -72,22 +76,36 @@ def obter_colecao(nome: str, criar: bool = False):
     return cliente.get_collection(nome, embedding_function=None)
 
 
-def _assinatura_pdfs(pdfs: list[Path]) -> dict:
-    """Mapa {nome do PDF: data de modificação em ns}, ordenado por nome."""
+def curso_indexado(course_id: int, colecao: str = None) -> bool:
+    """True se a coleção (padrão rag_j1_s0) já tem chunks do curso."""
+    col = obter_colecao(colecao or nome_colecao(1, 0))
+    return bool(col is not None and col.get(
+        where={"course_id": course_id}, limit=1, include=[])["ids"])
+
+
+def _assinatura_pdfs(pdfs: list[Path], course_id: int) -> dict:
+    """Mapa {caminho relativo à pasta do curso: mtime em ns}, ordenado.
+
+    Ex.: {"slides/aula03.pdf": 1731..., "raiz/aula09.pdf"...}. Chavear pelo
+    caminho faz a mudança de pasta (migração ou nova categoria) disparar a
+    reindexação, e evita colisão entre PDFs de mesmo nome em pastas diferentes.
+    """
+    pasta = (DIR_RAW / str(course_id)).resolve()
+    relativos = {p.resolve().relative_to(pasta).as_posix(): p for p in pdfs}
     return {
-        p.name: p.stat().st_mtime_ns
-        for p in sorted(pdfs, key=lambda p: p.name.lower())
+        rel: relativos[rel].stat().st_mtime_ns
+        for rel in sorted(relativos, key=str.lower)
     }
 
 
 def _registro_atual(colecao: str, janela: int, sobreposicao: int,
-                    pdfs: list[Path]) -> dict:
+                    pdfs: list[Path], course_id: int) -> dict:
     """Assinatura do que seria indexado: coleção, parâmetros e PDFs+mtimes."""
     return {
         "colecao": colecao,
         "janela": janela,
         "sobreposicao": sobreposicao,
-        "pdfs": _assinatura_pdfs(pdfs),
+        "pdfs": _assinatura_pdfs(pdfs, course_id),
     }
 
 
@@ -162,7 +180,7 @@ def indexar_curso(course_id: int, janela: int = 1, sobreposicao: int = 0,
             f"Curso {course_id} sem PDFs em data/raw/{course_id}/; nada foi indexado.")
 
     # Pula a reindexação se nada mudou e o curso ainda está na coleção.
-    registro = _registro_atual(colecao_nome, janela, sobreposicao, pdfs)
+    registro = _registro_atual(colecao_nome, janela, sobreposicao, pdfs, course_id)
     manifest = _carregar_manifest()
     if not forcar and manifest.get(str(course_id)) == registro:
         colecao = obter_colecao(colecao_nome)
@@ -192,8 +210,11 @@ def indexar_curso(course_id: int, janela: int = 1, sobreposicao: int = 0,
 
     vetores = embeddings_passages([c["texto"] for c in chunks])
 
+    # Categoria = subpasta real do PDF. Os nomes são únicos no curso (o Agente
+    # Canvas acrescenta _<file_id> em caso de repetição), então o nome basta.
+    categoria_por_arquivo = {p.name: categoria_do_pdf(p, course_id) for p in pdfs}
     for c in chunks:
-        c.setdefault("categoria", "conteudo")
+        c["categoria"] = categoria_por_arquivo.get(c["arquivo"], "raiz")
 
     colecao = obter_colecao(colecao_nome, criar=True)
     colecao.delete(where={"course_id": course_id})
