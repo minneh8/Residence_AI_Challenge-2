@@ -20,13 +20,21 @@ TextoNaoVazio = Annotated[str, StringConstraints(strip_whitespace=True, min_leng
 class TrechoReferencia(BaseModel):
     """Trecho do material que sustenta a questão.
 
-    Arquivo, página e texto vêm do RAG. O LLM só indica arquivo e página; o
-    texto é copiado do trecho original pelo código.
+    Arquivo, páginas e texto vêm do RAG. O LLM só indica arquivo e página
+    (a primeira); pagina_fim e o texto são copiados do trecho original pelo
+    código. Um trecho pode ocupar várias páginas: vai de pagina a pagina_fim.
     """
 
     arquivo: TextoNaoVazio
     pagina: int = Field(ge=1)
+    pagina_fim: int = Field(ge=1)
     texto: TextoNaoVazio
+
+    @model_validator(mode="after")
+    def _paginas_em_ordem(self) -> Self:
+        if self.pagina_fim < self.pagina:
+            raise ValueError("pagina_fim não pode ser menor que pagina")
+        return self
 
 
 class QuestaoMultiplaEscolha(BaseModel):

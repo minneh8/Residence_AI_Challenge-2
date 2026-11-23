@@ -26,7 +26,8 @@ def montar_prompt_usuario(
 ) -> str:
     """Monta a mensagem do usuário: os dados do pedido, cada um na sua tag.
 
-    Dos trechos vão só arquivo, página e texto; o score fica de fora.
+    Dos trechos vão só arquivo, página e texto; score e pagina_fim ficam de fora
+    (o LLM cita só arquivo e página, e o código copia o resto do trecho original).
     """
     material = [
         {"arquivo": t["arquivo"], "pagina": t["pagina"], "texto": t["texto"]} for t in trechos
@@ -72,6 +73,7 @@ EXEMPLO_TRECHOS = [
     {
         "arquivo": "exemplo_ficticio.pdf",
         "pagina": 4,
+        "pagina_fim": 4,
         "texto": (
             "A fotossíntese ocorre nos cloroplastos. Nela, a energia da luz é usada para "
             "transformar gás carbônico e água em glicose, liberando oxigênio."

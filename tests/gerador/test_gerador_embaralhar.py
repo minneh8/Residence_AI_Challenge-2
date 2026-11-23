@@ -16,7 +16,12 @@ from src.agente_gerador.service import (
     gerar_questoes,
 )
 
-TEXTO = {"arquivo": "aula_ficticia_01.pdf", "pagina": 3, "texto": "Texto do trecho."}
+TEXTO = {
+    "arquivo": "aula_ficticia_01.pdf",
+    "pagina": 3,
+    "pagina_fim": 3,
+    "texto": "Texto do trecho.",
+}
 
 
 def multipla(**mudancas) -> QuestaoMultiplaEscolha:

@@ -85,6 +85,14 @@ def test_texto_da_referencia_e_o_original_do_rag(buscar):
     ref = resultado.questoes[0].trecho_referencia
     assert ref.texto == TRECHOS[1]["texto"]
     assert (ref.arquivo, ref.pagina) == (TRECHOS[1]["arquivo"], TRECHOS[1]["pagina"])
+    assert ref.pagina_fim == TRECHOS[1]["pagina_fim"] == 6  # copiado do RAG, não do LLM
+
+
+def test_pagina_fim_mandada_pelo_llm_e_ignorada(buscar):
+    inventada = {**referencia(TRECHOS[0]), "pagina_fim": 99}
+    llm = LLMFalso(resposta(questao_dissertativa(1, TRECHOS[0], trecho_referencia=inventada)))
+    resultado = gerar(buscar, llm, quantidade=1, tipos=("dissertativa",))
+    assert resultado.questoes[0].trecho_referencia.pagina_fim == TRECHOS[0]["pagina_fim"]
 
 
 def test_ids_sao_renumerados(buscar):

@@ -12,6 +12,7 @@ from src.agente_gerador.models import (
 REFERENCIA = {
     "arquivo": "aula_ficticia_01.pdf",
     "pagina": 3,
+    "pagina_fim": 4,
     "texto": "Overfitting ocorre quando o modelo memoriza o ruído do treino.",
 }
 
@@ -111,6 +112,26 @@ def test_referencia_exige_pagina_positiva():
         QuestaoDissertativa.model_validate(
             dissertativa(trecho_referencia={**REFERENCIA, "pagina": 0})
         )
+
+
+def test_referencia_exige_pagina_fim():
+    sem_fim = {chave: valor for chave, valor in REFERENCIA.items() if chave != "pagina_fim"}
+    with pytest.raises(ValidationError):
+        QuestaoDissertativa.model_validate(dissertativa(trecho_referencia=sem_fim))
+
+
+def test_pagina_fim_nao_pode_vir_antes_da_pagina():
+    with pytest.raises(ValidationError, match="pagina_fim"):
+        QuestaoDissertativa.model_validate(
+            dissertativa(trecho_referencia={**REFERENCIA, "pagina": 5, "pagina_fim": 4})
+        )
+
+
+def test_pagina_fim_igual_a_pagina_vale():
+    questao = QuestaoDissertativa.model_validate(
+        dissertativa(trecho_referencia={**REFERENCIA, "pagina": 3, "pagina_fim": 3})
+    )
+    assert questao.trecho_referencia.pagina_fim == 3
 
 
 def test_uniao_escolhe_a_classe_pelo_tipo():

@@ -17,6 +17,7 @@ TRECHOS = [
         "texto": "Regularização L2 penaliza pesos grandes para reduzir a variância.",
         "arquivo": "aula_ficticia_02.pdf",
         "pagina": 2,
+        "pagina_fim": 2,
         "score": 0.77,
     }
 ]
@@ -88,8 +89,9 @@ def test_exemplo_aparece_inteiro_no_prompt():
 
 def test_exemplo_do_prompt_passa_nos_modelos():
     validar = TypeAdapter(Questao).validate_python
-    textos = {(t["arquivo"], t["pagina"]): t["texto"] for t in EXEMPLO_TRECHOS}
+    originais = {(t["arquivo"], t["pagina"]): t for t in EXEMPLO_TRECHOS}
     for item in EXEMPLO_SAIDA["questoes"]:
         ref = item["trecho_referencia"]
-        texto = textos[(ref["arquivo"], ref["pagina"])]
-        validar({**item, "trecho_referencia": {**ref, "texto": texto}})
+        original = originais[(ref["arquivo"], ref["pagina"])]
+        completa = {**ref, "pagina_fim": original["pagina_fim"], "texto": original["texto"]}
+        validar({**item, "trecho_referencia": completa})

@@ -27,8 +27,13 @@ def formatar(resultado: ResultadoGeracao) -> str:
                 linhas.append(f"   {marca} {letra}) {texto}")
         ref = questao.trecho_referencia
         resumo = ref.texto if len(ref.texto) <= TAMANHO_FONTE else ref.texto[:TAMANHO_FONTE] + "..."
-        linhas.append(f"  fonte: {ref.arquivo}, p. {ref.pagina}: {resumo}")
+        linhas.append(f"  fonte: {ref.arquivo}, {paginas(ref.pagina, ref.pagina_fim)}: {resumo}")
     return "\n".join(linhas)
+
+
+def paginas(inicio: int, fim: int) -> str:
+    """ "p. 3" para uma página só e "p. 3–5" (com meia-risca) para várias."""
+    return f"p. {inicio}" if inicio == fim else f"p. {inicio}–{fim}"
 
 
 def resultado_do_estado(estado: Mapping[str, Any]) -> ResultadoGeracao | None:

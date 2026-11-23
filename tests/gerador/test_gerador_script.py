@@ -35,9 +35,10 @@ def test_trechos_de_exemplo_estao_no_formato_do_rag():
     trechos = trechos_exemplo()
     assert len(trechos) == 5
     for trecho in trechos:
-        assert set(trecho) == {"texto", "arquivo", "pagina", "score"}
+        assert set(trecho) == {"texto", "arquivo", "pagina", "pagina_fim", "score"}
         assert isinstance(trecho["pagina"], int)
         assert trecho["pagina"] >= 1
+        assert trecho["pagina_fim"] >= trecho["pagina"]
         assert trecho["texto"].strip()
     assert len(selecionar_trechos(trechos)) == 5  # todos acima do limiar e sem repetição
 
@@ -74,6 +75,18 @@ def test_script_sem_material_nao_chama_o_llm(capsys, tmp_path):
     codigo = carregar_script().main(["overfitting", "--trechos", str(fracos)], chamar_llm=llm)
     assert codigo == 1
     assert "status: sem_material" in capsys.readouterr().out
+    assert llm.chamadas == []
+
+
+def test_trecho_sem_pagina_fim_mostra_o_erro_do_argparse(capsys, tmp_path):
+    antigo = tmp_path / "trechos_antigos.json"
+    conteudo = [{k: v for k, v in t.items() if k != "pagina_fim"} for t in trechos_exemplo()]
+    antigo.write_text(json.dumps(conteudo, ensure_ascii=False), encoding="utf-8")
+    llm = LLMFalso()
+    with pytest.raises(SystemExit) as saida:
+        carregar_script().main(["overfitting", "--trechos", str(antigo)], chamar_llm=llm)
+    assert saida.value.code == 2
+    assert "pagina_fim" in capsys.readouterr().err
     assert llm.chamadas == []
 
 

@@ -25,12 +25,18 @@ from src.agente_gerador.apresentacao import formatar  # noqa: E402
 from src.agente_gerador.models import ResultadoGeracao  # noqa: E402
 from src.rag import buscar as buscar_no_rag  # noqa: E402
 
+CHAVES_TRECHO = {"texto", "arquivo", "pagina", "pagina_fim", "score"}  # o formato do buscar()
+
 def carregar_trechos(caminho: Path) -> list[dict]:
-    """Lê uma lista de trechos no formato do buscar(): texto, arquivo, pagina, score."""
+    """Lê uma lista de trechos no formato do buscar() (ver CHAVES_TRECHO)."""
     with caminho.open(encoding="utf-8") as arquivo:
         trechos = json.load(arquivo)
     if not isinstance(trechos, list) or not all(isinstance(t, dict) for t in trechos):
         raise ValueError(f"{caminho} deve conter uma lista de trechos")
+    for numero, trecho in enumerate(trechos, start=1):
+        faltando = CHAVES_TRECHO - set(trecho)
+        if faltando:
+            raise ValueError(f"{caminho}: o trecho {numero} não tem {sorted(faltando)}")
     return trechos
 
 

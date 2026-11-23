@@ -128,8 +128,8 @@ def validar_saida(
     sem_material true, "questoes" tem de vir vazia. Sem a chave sem_material,
     vale como false.
 
-    Lança SaidaInvalida na primeira regra que falhar. O texto de cada
-    trecho_referencia é sempre o original do RAG, e os ids viram q1, q2, ...
+    Lança SaidaInvalida na primeira regra que falhar. O texto e a pagina_fim de
+    cada trecho_referencia são sempre os originais do RAG, e os ids viram q1, q2, ...
     """
     if resposta.finish_reason == "length":
         raise SaidaInvalida("resposta truncada: acabou o limite de tokens (finish_reason=length)")
@@ -176,6 +176,7 @@ def validar_saida(
             "trecho_referencia": {
                 "arquivo": original["arquivo"],
                 "pagina": original["pagina"],
+                "pagina_fim": original["pagina_fim"],
                 "texto": original["texto"],
             },
         }
