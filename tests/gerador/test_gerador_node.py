@@ -131,7 +131,7 @@ def test_no_repassa_sem_material(monkeypatch):
 
     assert saida["generation_status"] == "sem_material"
     assert saida["generated_questions"] == []
-    assert "Procure o professor" in saida["generation_message"]
+    assert "Confira se o tema está escrito como nas aulas" in saida["generation_message"]
     assert llm.chamadas == []
 
 

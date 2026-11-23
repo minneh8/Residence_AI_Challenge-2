@@ -7,8 +7,8 @@ import json
 import logging
 from types import SimpleNamespace
 
-import httpx
 import groq
+import httpx
 import pytest
 from dubles_gerador import (
     TRECHO_FRACO,
@@ -268,16 +268,71 @@ def test_sem_material_nao_chama_o_llm():
     assert resultado.status == "sem_material"
     assert resultado.questoes == []
     assert resultado.mensagem == (
-        'Não encontrei material sobre "redes neurais" nesta disciplina. Procure o professor.'
+        'Não encontrei material sobre "redes neurais" nesta disciplina. '
+        "Confira se o tema está escrito como nas aulas."
     )
     assert llm.chamadas == []
     assert buscar.chamadas[0]["pergunta"] == "redes neurais"
 
 
-def test_rag_sem_resultado_e_sem_material():
+def test_rag_sem_resultado_e_curso_nao_indexado():
     llm = LLMFalso()
-    assert gerar(BuscarFalso([]), llm).status == "sem_material"
+    resultado = gerar(BuscarFalso([]), llm)
+    assert resultado.status == "sem_material"
+    assert resultado.mensagem == service.MENSAGEM_CURSO_NAO_INDEXADO
     assert llm.chamadas == []
+
+
+def sem_material_do_llm() -> RespostaLLM:
+    return RespostaLLM(conteudo='{"sem_material": true, "questoes": []}', finish_reason="stop")
+
+
+def test_llm_recusa_e_vira_sem_material_sem_nova_tentativa(buscar):
+    llm = LLMFalso(sem_material_do_llm())  # só uma resposta na fila: uma segunda chamada falharia
+    resultado = gerar(buscar, llm, quantidade=3, tema="  redes neurais  ")
+    assert resultado.status == "sem_material"
+    assert resultado.questoes == []
+    assert resultado.mensagem == (
+        'O material encontrado sobre "redes neurais" não é suficiente para 3 questões. '
+        "Tente um tema mais específico ou peça menos questões."
+    )
+    assert len(llm.chamadas) == 1
+
+
+def test_validar_saida_devolve_none_quando_o_llm_recusa():
+    assert validar_saida(sem_material_do_llm(), 2, AMBOS, TRECHOS_BONS) is None
+
+
+def test_sem_material_false_explicito_vale_como_resposta_normal():
+    dados = json.loads(resposta(questao_multipla(1), questao_dissertativa(2)).conteudo)
+    saida = RespostaLLM(conteudo=json.dumps({"sem_material": False, **dados}), finish_reason="stop")
+    assert len(validar_saida(saida, 2, AMBOS, TRECHOS_BONS)) == 2
+
+
+@pytest.mark.parametrize(
+    "conteudo",
+    [
+        {"sem_material": True, "questoes": ["q1"]},  # tudo ou nada
+        {"sem_material": "true", "questoes": []},  # texto no lugar de booleano
+        {"sem_material": True},  # falta a lista "questoes"
+    ],
+    ids=["recusa-com-questoes", "sem-material-texto", "recusa-sem-lista"],
+)
+def test_sem_material_mal_formado_e_saida_invalida(conteudo):
+    saida = RespostaLLM(conteudo=json.dumps(conteudo), finish_reason="stop")
+    with pytest.raises(SaidaInvalida):
+        validar_saida(saida, 2, AMBOS, TRECHOS_BONS)
+
+
+def test_recusa_com_questoes_usa_a_nova_tentativa(buscar):
+    mal_formada = RespostaLLM(
+        conteudo=json.dumps({"sem_material": True, "questoes": [questao_multipla(1)]}),
+        finish_reason="stop",
+    )
+    llm = LLMFalso(mal_formada, resposta(questao_multipla(1), questao_dissertativa(2)))
+    resultado = gerar(buscar, llm)
+    assert resultado.status == "ok"
+    assert len(llm.chamadas) == 2
 
 
 # --- Trechos e busca -----------------------------------------------------------------

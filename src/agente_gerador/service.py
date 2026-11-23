@@ -2,9 +2,11 @@
 
 Fluxo de gerar_questoes():
 
-    buscar trechos no RAG -> descartar os fracos (score < SCORE_MINIMO)
-    -> nenhum trecho: "sem_material", sem chamar o LLM
+    buscar trechos no RAG
+    -> o RAG não devolveu nada (curso não indexado): "sem_material"
+    -> descartar os fracos (score < SCORE_MINIMO); nenhum sobrou: "sem_material"
     -> chamar o LLM -> validar a saída no código -> "ok"
+    -> o LLM respondeu {"sem_material": true, "questoes": []}: "sem_material"
     -> saída inválida ou falha da API: uma nova tentativa; duas falhas: "erro"
 
 As funções são puras e testáveis sem LangGraph e sem rede: o RAG e o LLM entram
@@ -48,8 +50,18 @@ ESFORCO_RACIOCINIO = "low"
 TEMPO_LIMITE_S = 60
 CAMINHO_ENV = Path(__file__).resolve().parents[2] / ".env"  # .env na raiz do projeto
 
+# Três motivos de "sem_material", cada um com o que o aluno pode fazer em seguida.
+MENSAGEM_CURSO_NAO_INDEXADO = (
+    "O material desta disciplina ainda não foi carregado no Glaux. "
+    "Tente de novo mais tarde ou avise o professor."
+)
 MENSAGEM_SEM_MATERIAL = (
-    'Não encontrei material sobre "{tema}" nesta disciplina. Procure o professor.'
+    'Não encontrei material sobre "{tema}" nesta disciplina. '
+    "Confira se o tema está escrito como nas aulas."
+)
+MENSAGEM_LLM_RECUSOU = (
+    'O material encontrado sobre "{tema}" não é suficiente para {quantidade} questões. '
+    "Tente um tema mais específico ou peça menos questões."
 )
 MENSAGEM_ERRO = "Não consegui gerar as questões agora. Tente de novo em alguns minutos."
 
@@ -101,8 +113,13 @@ def montar_mensagens(
 
 def validar_saida(
     resposta: RespostaLLM, quantidade: int, tipos: Sequence[str], trechos: Sequence[dict]
-) -> list[Questao]:
+) -> list[Questao] | None:
     """Confere a resposta do LLM e devolve as questões prontas.
+
+    Devolve None quando o LLM diz que os trechos não sustentam a quantidade
+    pedida ({"sem_material": true, "questoes": []}). É tudo ou nada: com
+    sem_material true, "questoes" tem de vir vazia. Sem a chave sem_material,
+    vale como false.
 
     Lança SaidaInvalida na primeira regra que falhar. O texto de cada
     trecho_referencia é sempre o original do RAG, e os ids viram q1, q2, ...
@@ -119,6 +136,15 @@ def validar_saida(
     if not isinstance(dados, dict) or not isinstance(dados.get("questoes"), list):
         raise SaidaInvalida('o JSON deve ser um objeto com a lista "questoes"')
     itens = dados["questoes"]
+    sem_material = dados.get("sem_material", False)
+    if not isinstance(sem_material, bool):
+        raise SaidaInvalida(f'"sem_material" deve ser true ou false, e veio {sem_material!r}')
+    if sem_material:
+        if itens:
+            raise SaidaInvalida(
+                f'"sem_material" é true, mas vieram {len(itens)} questões (deve ser tudo ou nada)'
+            )
+        return None
     if len(itens) != quantidade:
         raise SaidaInvalida(f"vieram {len(itens)} questões, mas o pedido era {quantidade}")
 
@@ -222,7 +248,10 @@ def gerar_questoes(
     tipos = _validar_entrada(tema, course_id, quantidade, tipos)
     tema = tema.strip()
 
-    trechos = selecionar_trechos(buscar(tema, course_id, k=max(K_MINIMO, quantidade)))
+    recuperados = buscar(tema, course_id, k=max(K_MINIMO, quantidade))
+    if not recuperados:  # o buscar() do RAG só volta vazio quando o curso não está indexado
+        return ResultadoGeracao(status="sem_material", mensagem=MENSAGEM_CURSO_NAO_INDEXADO)
+    trechos = selecionar_trechos(recuperados)
     if not trechos:
         return ResultadoGeracao(
             status="sem_material", mensagem=MENSAGEM_SEM_MATERIAL.format(tema=tema)
@@ -237,6 +266,11 @@ def gerar_questoes(
                 "Gerador de questões: tentativa %d de %d falhou: %s", tentativa, TENTATIVAS, erro
             )
             continue
+        if questoes is None:  # o LLM disse que o material não basta: aceita, sem nova tentativa
+            return ResultadoGeracao(
+                status="sem_material",
+                mensagem=MENSAGEM_LLM_RECUSOU.format(tema=tema, quantidade=quantidade),
+            )
         return ResultadoGeracao(status="ok", questoes=questoes)
     return ResultadoGeracao(status="erro", mensagem=MENSAGEM_ERRO)
 
