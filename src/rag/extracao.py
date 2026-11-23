@@ -98,30 +98,43 @@ def remover_rodape_numeracao(texto: str) -> str:
 
 
 def listar_pdfs(course_id: int) -> list[Path]:
-    """Lista, em ordem alfabética, os PDFs de conteúdo de data/raw/<course_id>/.
+    """Lista, em ordem alfabética, os PDFs de conteudo de data/raw/<course_id>/.
 
-    Arquivos de apoio (ver PADROES_NAO_CONTEUDO: listas, exercícios, roteiros)
-    são descartados da indexação e registrados no log; os arquivos continuam
-    em data/raw/, apenas não entram no índice.
+    Prioriza os PDFs ja triados pelo Agente Canvas em data/raw/<course_id>/conteudo/
+    e tambem considera PDFs soltos na raiz da disciplina (exceto os de apoio),
+    ignorando a subpasta listas/ (que e de uso do Agente Gerador).
 
     Raises:
-        FileNotFoundError: se a pasta do curso não existir.
+        FileNotFoundError: se a pasta do curso nao existir.
     """
     pasta = DIR_RAW / str(course_id)
     if not pasta.is_dir():
-        raise FileNotFoundError(f"Pasta do curso não encontrada: {pasta}")
-    todos = sorted(
-        (p for p in pasta.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"),
-        key=lambda p: p.name.lower(),
-    )
-    conteudo = [p for p in todos if not eh_nao_conteudo(p.name)]
-    ignorados = [p for p in todos if eh_nao_conteudo(p.name)]
+        raise FileNotFoundError(f"Pasta do curso nao encontrada: {pasta}")
+
+    pdfs_conteudo: list[Path] = []
+
+    # 1. Le tudo que o Agente Canvas ja classificou dentro de conteudo/
+    pasta_conteudo = pasta / "conteudo"
+    if pasta_conteudo.is_dir():
+        pdfs_conteudo.extend(
+            p for p in pasta_conteudo.rglob("*")
+            if p.is_file() and p.suffix.lower() == ".pdf"
+        )
+
+    # 2. Retrocompatibilidade: le PDFs soltos na raiz do curso que nao sejam de apoio
+    soltos_raiz = [
+        p for p in pasta.iterdir()
+        if p.is_file() and p.suffix.lower() == ".pdf"
+    ]
+    ignorados = [p for p in soltos_raiz if eh_nao_conteudo(p.name)]
     if ignorados:
         logger.info(
-            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexação: %s",
+            "Curso %s: %d arquivo(s) de apoio ignorado(s) na indexacao: %s",
             course_id, len(ignorados), ", ".join(p.name for p in ignorados),
         )
-    return conteudo
+    pdfs_conteudo.extend(p for p in soltos_raiz if not eh_nao_conteudo(p.name))
+
+    return sorted(pdfs_conteudo, key=lambda p: p.name.lower())
 
 
 def extrair_pdf(caminho: Path, course_id: int) -> list[dict]:
