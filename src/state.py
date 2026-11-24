@@ -43,4 +43,7 @@ class GlauxState(BaseModel):
     tema: Optional[str] = None            # --tema: consulta única do Tutor
     curso_alvo: Optional[int] = None      # --curso: restringe a esteira a um curso
     sync_completo: bool = False           # --completo: ignora a parada antecipada do Canvas
+    quantidade_questoes: Optional[int] = None  # --questoes: quantas questões gerar
     generated_questions: List[dict] = Field(default_factory=list)
+    generation_status: Optional[str] = None  # "ok", "sem_material" ou "erro"
+    generation_message: Optional[str] = None  # mensagem para o aluno quando não há questões
