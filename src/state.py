@@ -42,4 +42,7 @@ class GlauxState(BaseModel):
     # Opções da linha de comando (ver src/graph.py).
     tema: Optional[str] = None            # --tema: consulta única do Tutor
     curso_alvo: Optional[int] = None      # --curso: restringe a esteira a um curso
+    quantidade_questoes: Optional[int] = None  # --questoes: quantas questões gerar
     generated_questions: List[dict] = Field(default_factory=list)
+    generation_status: Optional[str] = None  # "ok", "sem_material" ou "erro"
+    generation_message: Optional[str] = None  # mensagem para o aluno quando não há questões
