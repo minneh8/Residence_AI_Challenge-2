@@ -15,5 +15,8 @@ langgraph==1.2.20
 langchain-core==1.8.0
 langchain-groq==1.1.3
 
+# --- Interface web ---
+streamlit==1.67.0
+
 # --- Testes ---
 pytest==9.2.0

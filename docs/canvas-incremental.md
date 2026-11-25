@@ -306,3 +306,62 @@ Copy-Item .env.example .env     # preencher CANVAS_API_KEY, CANVAS_API_URL e GRO
 ```
 
 `.env`, `.venv` e `data/` ficam **fora do Git**. O `data/` (PDFs, índice do Chroma e logs) precisa ser recriado em cada máquina rodando o agente ou copiado manualmente.
+
+## Interface (Streamlit) — etapa 4
+
+Interface web que junta Canvas, Tutor e Gerador numa única tela.
+
+### Como rodar
+
+```powershell
+.\.venv\Scripts\streamlit.exe run app/streamlit_app.py
+```
+
+Abre em `http://localhost:8501`. Precisa do `.env` preenchido (`CANVAS_API_KEY`,
+`CANVAS_API_URL`, `GROQ_API_KEY`) e do curso já em `data/raw/<id>/` com índice no
+Chroma (rode a sincronização ou `python src/graph.py --curso <id> --tema ...` antes).
+
+### Arquitetura
+
+- **`app/streamlit_app.py`** só conhece **`src/interface/acoes.py`**; não importa os
+  agentes diretamente.
+- **`executar_acao(action, course_id, tema, quantidade, forcar)`** monta o `GlauxState`,
+  decide o plano (quais agentes rodam, na ordem) e mede o tempo de cada etapa. Devolve
+  `agentes` (ordem), `tempos` (por agente), `tempo_sincronizacao` (só o Canvas),
+  `resultados` (por agente) e `erro` (mensagem amigável ou `None`).
+- As ações usam **exatamente** os valores de `state.action` do agente orquestrador
+  (`origin/orquestrador`): `SINCRONIZAR_CANVAS`, `GERAR_CRONOGRAMA`, `GERAR_RESUMO`,
+  `GERAR_QUESTOES`, `FLUXO_COMPLETO`. Enquanto o nó do orquestrador não entra no
+  `graph.py`, é a própria `executar_acao` que roteia; quando entrar, ela passa a só
+  definir `state.action` e chamar o grafo (documentado no topo de `acoes.py`).
+- O plano segue a lógica do `OrchestratorService` (pula o Canvas quando já há dados
+  locais, salvo "forçar varredura completa"), com uma diferença: **`GERAR_QUESTOES`
+  não passa pelo Tutor** — o Gerador lê o RAG direto e não depende do resumo.
+- O modelo de embeddings E5 é carregado uma vez via `st.cache_resource`.
+- Erros viram mensagens claras, sem stack trace na tela: token inválido, `CANVAS_API_URL`
+  ausente, Canvas fora do ar, Groq indisponível e curso sem índice.
+
+### O que cada parte faz
+
+- **Barra lateral:** usuário autenticado (nome vindo do Canvas, o token nunca aparece);
+  seleção do curso (pastas em `data/raw/` + botão "Listar cursos do Canvas" para trazer
+  os nomes); botão "Sincronizar Canvas" com a opção "Forçar varredura completa".
+- **Resultado da sincronização:** novos, atualizados, migrados, pulados, pendentes da LLM,
+  contagem por categoria, requisições ao Canvas e tempo da sincronização.
+- **Aba Materiais:** arquivos do `_arquivos.json` agrupados por categoria, com nome,
+  páginas e origem da classificação (regra ou LLM).
+- **Aba Resumo:** campo de tema → resumo do Tutor em markdown com as citações inline e a
+  lista de fontes (arquivo e página) logo abaixo.
+- **Aba Questões:** tema + quantidade → questões do Gerador (enunciado, alternativas,
+  resposta correta e o trecho de referência citado).
+- **Aba Prazos:** tarefas do `assignments.json` ordenadas por data, destacando as dos
+  próximos 7 dias.
+- **Rodapé de cada ação:** "Agentes executados: Canvas → Tutor …" com o tempo de cada um.
+
+### Tempo medido (curso 93527, máquina de origem, CPU)
+
+- **Sincronização** (sem downloads, 4 requisições ao Canvas): **~3,9 s**.
+- **Resumo** de "hipótese nula" (só Tutor, RAG + Groq): **~12 s**.
+- **Questões** (3 questões, só Gerador, RAG + Groq): **~2 s**.
+
+A primeira busca do processo inclui a carga do modelo E5 (~1,1 GB), fora desses tempos.
