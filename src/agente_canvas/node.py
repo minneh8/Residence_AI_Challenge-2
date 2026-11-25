@@ -56,10 +56,12 @@ def _imprimir_resumo(r: Dict[str, Any]) -> None:
         print(f"   parada antecipada em: {r['parou_em']}")
     if r.get("pendentes_llm"):
         print(f"   aguardando a LLM (erro da API, fora do catálogo): {r['pendentes_llm']}")
+    if r.get("bloqueados"):
+        print(f"   bloqueados para o aluno (módulo não publicado, sem download): {r['bloqueados']}")
     if r.get("removidos"):
         print(f"   removidos do catálogo (não existem mais no Canvas): {r['removidos']}")
     print(f"   por categoria (catálogo): {r['categorias']}")
-    motivo = "não (houve falha ou LLM indisponível)"
+    motivo = "não (houve falha, LLM indisponível ou arquivo bloqueado)"
     print(f"   estado do aluno gravado: {'sim' if r['estado_gravado'] else motivo}")
 
 

@@ -274,6 +274,23 @@ def test_falha_num_arquivo_nao_grava_estado(tmp_path, canvas):
     assert canvas.downloads == ["aula02.pdf"] and r["estado_gravado"]
 
 
+def test_bloqueado_para_o_aluno_nao_baixa_e_segura_o_estado(tmp_path, canvas):
+    # Módulo não publicado: o Canvas lista o arquivo com locked_for_user e o
+    # download dá 404. Não deve tentar baixar nem contar como falha.
+    canvas.adicionar(8, "aula03.pdf", "2026-11-01T10:00:00Z", "Slides de Aula")
+    canvas.arquivos[-1].locked_for_user = True
+    service = criar_service(tmp_path, canvas)
+    r = service.sincronizar_curso(CURSO)
+    assert r["bloqueados"] == ["aula03.pdf"] and r["falhas"] == []
+    assert "aula03.pdf" not in canvas.downloads and not r["estado_gravado"]
+
+    canvas.arquivos[-1].locked_for_user = False  # professor publicou o módulo
+    canvas.zerar_contadores()
+    r = service.sincronizar_curso(CURSO)
+    assert canvas.downloads == ["aula03.pdf"] and r["novos"] == ["aula03.pdf"]
+    assert r["bloqueados"] == [] and r["estado_gravado"]
+
+
 def test_migracao_de_pdfs_soltos_e_pastas_antigas_nao_baixa(tmp_path, canvas):
     pasta = pasta_curso(tmp_path)
     (pasta / "conteudo").mkdir(parents=True)

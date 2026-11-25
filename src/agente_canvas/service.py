@@ -300,11 +300,15 @@ class CanvasService:
             se indefinido, LLM) e move para data/raw/<id>/<categoria>/<nome>.
             Numa atualização com o mesmo nome, a categoria é mantida.
 
-        O estado do aluno só é gravado se não houve nenhuma falha.
+        PDFs bloqueados para o aluno (locked_for_user, ex.: módulo não
+        publicado) não são baixados e vão para `bloqueados`.
+
+        O estado do aluno só é gravado se não houve nenhuma falha, pendente da
+        LLM ou bloqueado.
 
         Returns:
             Resumo com as listas novos, atualizados, recuperados, registrados,
-            migrados, pulados, falhas, removidos, baixados (caminhos), além de
+            migrados, pulados, falhas, removidos, bloqueados, baixados (caminhos), além de
             categorias (contagem no catálogo), requisicoes, parou_em, mudou e
             estado_gravado.
         """
@@ -320,7 +324,8 @@ class CanvasService:
             "course_id": course_id,
             "novos": [], "atualizados": [], "recuperados": [], "registrados": [],
             "migrados": [], "pulados": [], "falhas": [], "removidos": [],
-            "baixados": [], "pendentes_llm": [], "parou_em": None, "estado_gravado": False,
+            "baixados": [], "pendentes_llm": [], "bloqueados": [], "parou_em": None,
+            "estado_gravado": False,
         }
 
         course = self._com_retentativas(
@@ -366,6 +371,17 @@ class CanvasService:
                 resumo["pulados"].append(nome_canvas)
                 continue
 
+            # Bloqueado para o aluno (ex.: módulo não publicado): o Canvas lista o
+            # arquivo, mas sem url e o download dá 404. Não tenta baixar e, como
+            # pendentes_llm, segura o estado para ser visto de novo quando liberar.
+            if getattr(arquivo, "locked_for_user", False) is True:
+                entrada = catalogo.get(fid)
+                ja_tem = (entrada and entrada.get("updated_at") == atualizado_em
+                          and catalogo.existe_no_disco(entrada))
+                if not ja_tem:
+                    resumo["bloqueados"].append(nome_canvas)
+                    continue
+
             parcial = pasta / f".{fid}.part"
             try:
                 self._tratar_pdf(arquivo, nome_canvas, atualizado_em, catalogo,
@@ -402,7 +418,7 @@ class CanvasService:
             print(f" [Canvas] {len(soltos)} PDF(s) local(is) sem correspondência no "
                   f"Canvas ficaram onde estavam: {restantes}")
 
-        if not resumo["falhas"] and not resumo["pendentes_llm"]:
+        if not resumo["falhas"] and not resumo["pendentes_llm"] and not resumo["bloqueados"]:
             ultimo = primeiro or (
                 (estado_curso or {}).get("ultimo_updated_at"),
                 (estado_curso or {}).get("ultimo_file_id"),

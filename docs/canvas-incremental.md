@@ -273,6 +273,93 @@ são decididos pelas regras.
 - Risco: um curso sem slides em PDF (ex.: 93511, só livros e trabalhos) não tem trechos
   para o Tutor com o filtro `["slides"]`, e o Tutor responde "Matéria não indexada".
 
+## Testes com todos os cursos (25/11)
+
+Máquina nova: só o 93527 existia, na estrutura antiga (plana, aula00 a aula07, sem
+catálogo). Backup em `data/_backup/<data-hora>/` antes de começar.
+
+### Ferramentas novas
+
+- `scripts/sincronizar.py [--curso ID] [--completo] [--sem-indexar]`: só o Agente
+  Canvas, sem Tutor. Grava `data/logs/sync_<data-hora>.json` com as contagens por curso,
+  requisições, MB baixados e tempo.
+- `scripts/verificar_canvas.py [--curso ID] [--sem-canvas]`: 8 checagens de
+  integridade (id em dois caminhos, sha256 duplicado, nome em duas categorias, catálogo ×
+  disco, tamanho × `size` do Canvas, `.part`/`.tmp`, PDFs do Canvas fora do catálogo).
+  `--snapshot <arq>` salva sha256 + mtime; `--comparar <a> <b>` lista o que mudou.
+
+### Resultados
+
+- **Rodada 1** (12 cursos): 91 novos, 8 migrados (93527), 128 pulados (não PDF),
+  354 MB, 422 requisições, ~10 min. Duas falhas no 93501 (ver "bloqueados" abaixo).
+- **Rodada 2**: 0 downloads, 4 requisições por curso, 27,6 s no total; parada no 1º
+  item em todos os cursos com arquivos, exceto no 93501 (varredura completa por causa
+  dos bloqueados, só registrando). `verificar_canvas.py`: 0 problemas;
+  `--comparar snap1 snap2`: nenhum arquivo mudou.
+- **Cenários no 93527**: apagado do disco → só ele recuperado; professor atualiza
+  depois da última sincronização (estado em `updated_at(aula05) − 1 s`) → só o aula05
+  atualizado, os mais recentes registrados, parada no aula04; entrada mais recente fora
+  do catálogo e do estado → só ela baixada como nova; `--completo` → 13 registrados, 0
+  downloads; outro aluno no mesmo PC (sem estado) → 13 "só registrados", 0 downloads.
+- **Classificação** (99 PDFs): 54 por regras e 45 pela LLM, 0 pendentes. 8 em `outros`
+  (planos de ensino, cronogramas, agenda, notas). 17 `livros` com menos de 100 páginas
+  (a maioria capítulos/apostilas decididos pela LLM; ela foi inconsistente nos
+  `Fund_Redes_Cap*` do 93501). Nenhum slide com mais de 150 páginas.
+- **Indexação** (`rag_j1_s0`, CPU): 7.242 chunks em 9 cursos, ~40 min. O 93527 voltou
+  aos 358 chunks (slides 299, listas 31, trabalho 28). Livros dominam o índice (5.867).
+
+| curso | chunks | tempo (s) |
+|---|---|---|
+| 93527 | 358 | 100 |
+| 93522 | 0 | 0,1 |
+| 93532 | 1.774 | 693 |
+| 93496 | 656 | 203 |
+| 94896 | 34 | 25 |
+| 93491 | 13 | 16 |
+| 94158 | 284 | 49 |
+| 93501 | 424 | 61 |
+| 93516 | 2.348 | 790 |
+| 93511 | 1.351 | 475 |
+
+### Mudança no agente: arquivos bloqueados para o aluno
+
+- No 93501, dois PDFs de um **módulo não publicado** vêm na listagem com
+  `locked_for_user: true` e sem `url`; o download dava 404, gastava ~17 s em
+  retentativas e contava como falha.
+- Agora vão para `resumo["bloqueados"]`, sem tentar baixar. Como `pendentes_llm`, seguram
+  o estado do aluno, para serem vistos de novo quando o módulo for publicado. A regra de
+  parada não mudou. Teste: `test_bloqueado_para_o_aluno_nao_baixa_e_segura_o_estado`.
+- Efeito colateral: enquanto houver bloqueados, o curso faz varredura completa em toda
+  sincronização (mesmas 4 requisições, nada é baixado).
+
+### Pendências da classificação
+
+Mudanças nas regras do `classificador.py` e nos esperados dos testes precisam ser
+mostradas antes ao usuário.
+
+1. **"modelo" e "guia" como sinais fracos, depois de aula/capítulo.** Hoje
+   `nome:modelo` vence "aula": "Aula 07 - Qualidade em Software - Modelos e Normas" e
+   "Aula 12 - Modelo da Qualidade CMMI" (93496), e "Fund_Redes_Cap02 - Modelo OSI" e
+   "RCCD_Cap02 - Modelo OSI" (93501) viraram `trabalho`. `nome:guia` mandou
+   "ApostilaGuiaESP32EBook.pdf" (47 p.) para `livros`. Proposta: "modelo"/"guia" só
+   decidem se o nome não tiver aula/slide/capítulo (`cap`, `capitulo`).
+2. **Regra de documentos administrativos → `outros`.** Plano de ensino, cronograma,
+   agenda, média/notas e boas-vindas. Hoje dependem da LLM, e "Plano Ensino PI_II.pdf"
+   (94896) virou `slides` pela regra `modulo:aula`; "BOAS VINDAS.pdf" (93491) virou
+   `slides` pela LLM.
+3. **Capítulos `Fund_Redes_*` inconsistentes (93501).** São todos do mesmo material, mas
+   a LLM pôs Cap04 e Cap07 em `slides` e Cap00, 01a, 01b, 03, 05b, 06 e 09 em `livros`
+   (o Cap06 tem 6 páginas). Arquivos da mesma série deveriam cair na mesma categoria.
+4. **Definição de "livros".** 17 `livros` têm menos de 100 páginas (capítulos avulsos,
+   apostilas, tutoriais e artigos). Decidir se "livros" é livro inteiro/apostila
+   (material de referência longo) e para onde vão capítulos, tutoriais e artigos.
+5. **Melhorar o prompt da LLM e reclassificar os 99 PDFs sem baixar.** O prompt deve
+   trazer a definição das categorias (itens 2 a 4) e exemplos. A reclassificação deve ler
+   os PDFs já no disco e atualizar categoria/origem no catálogo, movendo o arquivo de
+   pasta, sem novo download (45 dos 99 foram decididos pela LLM).
+6. **Limitação: OCR do 93522.** Os 7 PDFs de aula são só imagem (0 caracteres, ~2
+   imagens por página): o curso tem 0 chunks no índice. Sem OCR, ele fica fora do RAG.
+
 ## Decisões
 
 - **Classificação por camadas.** A primeira regra que decidir vale, nesta ordem: nome do arquivo (listas/trabalho/livros) → módulo → nome do arquivo (aula/slide) → número de páginas/tamanho → `indefinido` → LLM → `outros`. Não há camada de pasta: nenhum dos 3 cursos diagnosticados usa pastas (tudo fica em `course files`). Regras e LLM estão implementadas.
