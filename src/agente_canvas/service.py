@@ -20,7 +20,7 @@ from canvasapi.exceptions import CanvasException, InvalidAccessToken, Unauthoriz
 from src.state import CanvasCourse
 
 # URL padrão quando CANVAS_API_URL não está definida no .env.
-CANVAS_API_URL_PADRAO = "https://canvas.instructure.com"
+CANVAS_API_URL_PADRAO = "https://puc-campinas.instructure.com"
 
 # Mensagem única para token ausente ou inválido (401).
 MSG_TOKEN_INVALIDO = (

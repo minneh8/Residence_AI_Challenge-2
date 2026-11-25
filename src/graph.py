@@ -1,10 +1,9 @@
 # src/graph.py
-import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
+from typing import Any, Dict
 from dotenv import load_dotenv
 
 root_dir = Path(__file__).resolve().parent.parent
@@ -12,33 +11,59 @@ if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
 from langgraph.graph import END, START, StateGraph
+from src.state import GlauxState
+from src.agente_orquestrador.node import (
+    orchestrator_node,
+    rag_index_node,
+    route_from_orchestrator,
+)
 from src.agente_canvas.node import canvas_agent_node
 from src.agente_canvas.service import CanvasAuthError
 from src.agente_gerador.apresentacao import formatar, resultado_do_estado
 from src.agente_gerador.node import gerador_questoes_node
 from src.agente_gerador.service import TETO_QUESTOES
 from src.agente_tutor.node import tutor_agent_node
-from src.agente_tutor.service import frases_sem_citacao
-from src.state import GlauxState
 
-
-def _formatar_fontes(fontes: list) -> str:
-    """Formata sources_used (List[Dict]) como "[arquivo, p.X-Y]"."""
-    partes = []
-    for f in fontes:
-        if isinstance(f, dict):
-            partes.append(f"[{f.get('arquivo')}, p.{f.get('pagina')}-{f.get('pagina_fim')}]")
-        else:
-            partes.append(str(f))
-    return ", ".join(partes) if partes else "nenhuma"
+try:
+    from src.agente_gerador.node import question_generator_node
+except ImportError:
+    def question_generator_node(state: GlauxState) -> Dict[str, Any]:
+        print("[Agente Gerador] Modulo ainda nao plugado; mantendo estado atual.")
+        return {}
 
 
 def build_glaux_graph():
-    """Constrói o grafo orquestrador dos agentes do Projeto Glaux."""
+    """Constroi e compila o grafo dinamico orquestrado do Projeto Glaux."""
     workflow = StateGraph(GlauxState)
 
+    # 1. Registra todos os nos
+    workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("canvas_agent", canvas_agent_node)
+    workflow.add_node("rag_index_node", rag_index_node)
     workflow.add_node("tutor_agent", tutor_agent_node)
+    workflow.add_node("question_generator_agent", question_generator_node)
+
+    # 2. Entrada sempre passa pelo Orquestrador
+    workflow.add_edge(START, "orchestrator")
+
+    # 3. Roteamento condicional a partir do Orquestrador
+    workflow.add_conditional_edges(
+        "orchestrator",
+        route_from_orchestrator,
+        {
+            "canvas_agent": "canvas_agent",
+            "rag_index_node": "rag_index_node",
+            "tutor_agent": "tutor_agent",
+            "question_generator_agent": "question_generator_agent",
+            "END": END,
+        },
+    )
+
+    # 4. Todos os nos devolvem o controle ao Orquestrador ao concluir
+    workflow.add_edge("canvas_agent", "orchestrator")
+    workflow.add_edge("rag_index_node", "orchestrator")
+    workflow.add_edge("tutor_agent", "orchestrator")
+    workflow.add_edge("question_generator_agent", "orchestrator")
     # Sem --questoes, o gerador devolve {} e não chama nem o RAG nem o LLM.
     workflow.add_node("gerador_questoes", gerador_questoes_node)
 
@@ -74,70 +99,27 @@ def main() -> int:
             parser.error(f"--questoes deve ser um número de 1 a {TETO_QUESTOES}.")
 
     load_dotenv()
-    sys.stdout.reconfigure(errors="replace")
 
+    app = build_glaux_graph()
     initial_state = GlauxState(
         user_id="estudante_glaux",
         canvas_api_key=os.getenv("CANVAS_API_KEY"),
+        action="FLUXO_COMPLETO",
         tema=args.tema,
         curso_alvo=args.curso,
         quantidade_questoes=args.questoes,
     )
 
-    print(" Executando esteira completa do Glaux...\n")
-    inicio = time.perf_counter()
-    app = build_glaux_graph()
-    try:
-        final_state = app.invoke(initial_state)
-    except CanvasAuthError as e:
-        print(f"\n [ERRO] {e}")
-        return 1
+    print("Iniciando execucao orquestrada do Projeto Glaux...\n")
+    final_state = app.invoke(initial_state)
 
-    # --------------------------------------------------------------------------
-    #  CRONOGRAMA DE TAREFAS
-    # --------------------------------------------------------------------------
-    print("\n================  CRONOGRAMA DE TAREFAS ================")
-    assignments = final_state.get("assignments", [])
-    for task in assignments:
-        t = task if isinstance(task, dict) else task.model_dump()
-        dias = t.get("days_remaining")
-        dias_str = f"{dias} dias restantes" if dias is not None else "Sem prazo"
-        print(f"[{t.get('priority_level')}] {t.get('course_name')} | {t.get('title')}")
-        print(f"    {dias_str} | {t.get('action_recommendation')}\n")
+    # Remove credenciais sensiveis antes de salvar em disco
+    safe_output = {k: v for k, v in final_state.items() if k != "canvas_api_key"}
 
-    # --------------------------------------------------------------------------
-    #  RESUMOS DAS MATÉRIAS (+ auditoria de citações)
-    # --------------------------------------------------------------------------
-    print("\n================  RESUMOS DAS MATÉRIAS ================")
-    summaries = final_state.get("summaries", [])
-    for summary in summaries:
-        s = summary if isinstance(summary, dict) else summary.model_dump()
-        print(f"\n Disciplina: {s.get('course_name')}")
-        print(f" Título: {s.get('topic_title')}")
-        print(f" Fontes Utilizadas: {_formatar_fontes(s.get('sources_used', []))}")
-        print("--- CONTEÚDO DO RESUMO ---")
-        print(s.get("summary_text"))
-        sem_citacao = frases_sem_citacao(s.get("summary_text", ""))
-        if sem_citacao:
-            print(f"--- ⚠️ FRASES SEM CITAÇÃO ({len(sem_citacao)}) ---")
-            for frase in sem_citacao:
-                print(f"    • {frase}")
-        print("------------------------------------------------------------------")
-
-    # --------------------------------------------------------------------------
-    #  SALVA O RESULTADO DO TUTOR EM JSON
-    # --------------------------------------------------------------------------
     output_path = Path("data/processed/tutor_output.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    clean_output = {
-        "user_id": final_state.get("user_id"),
-        "courses": final_state.get("courses", []),
-        "assignments": final_state.get("assignments", []),
-        "summaries": final_state.get("summaries", []),
-        "downloaded_files": final_state.get("downloaded_files", []),
-    }
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(clean_output, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(safe_output, f, ensure_ascii=False, indent=2, default=str)
 
     print(f"\n Saída do Agente Tutor salva em: {output_path}")
 
