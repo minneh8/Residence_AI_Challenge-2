@@ -154,6 +154,9 @@ Todos os arquivos estão na pasta `course files`.
   com o host de exemplo `canvas.instructure.com`, que não é a instância da instituição
   e responde 503. O `CanvasService` não tem mais URL padrão: sem `CANVAS_API_URL` ele
   encerra com "CANVAS_API_URL não definido" em vez de cair no modo offline.
+  *(25/11, merge com a main: decidido usar `CANVAS_API_URL_PADRAO =
+  https://puc-campinas.instructure.com`, como no orquestrador do Lucas, quando
+  `CANVAS_API_URL` está vazia. O `CanvasConfigError` continua para URL vazia.)*
 - `scripts/classificar_logs.py` aplica o classificador a todos os PDFs dos logs
   `data/logs/diagnostico_<curso>.json` e destaca os indefinidos.
 

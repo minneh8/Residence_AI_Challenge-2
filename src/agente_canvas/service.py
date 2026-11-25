@@ -29,13 +29,18 @@ from src.agente_canvas.catalogo import (
 from src.agente_canvas.classificador import classificar
 from src.state import CanvasCourse
 
+# URL padrão quando CANVAS_API_URL não está definida no .env: a instância da
+# instituição. (O padrão antigo, canvas.instructure.com, respondia 503 e caía no
+# modo offline sem explicar a causa.)
+CANVAS_API_URL_PADRAO = "https://puc-campinas.instructure.com"
+
 # Mensagem única para token ausente ou inválido (401).
 MSG_TOKEN_INVALIDO = (
     "Token do Canvas ausente ou invalido. Confira CANVAS_API_KEY no .env"
 )
 
-# Não há URL padrão: canvas.instructure.com não é a instância da instituição e
-# responde 503, o que caía no modo offline sem explicar a causa.
+# Só aparece se a URL ficar vazia mesmo com o padrão (ex.: CANVAS_API_URL_PADRAO
+# esvaziado); mantida para o erro de configuração continuar claro.
 MSG_URL_AUSENTE = (
     "CANVAS_API_URL não definido. Informe no .env a URL da instituição "
     "(ex.: https://<instituicao>.instructure.com)"
@@ -115,7 +120,9 @@ class CanvasService:
                 classificador_llm.classificar_llm (Groq). Os testes passam uma
                 versão simulada.
         """
-        self.api_url = (api_url or os.getenv("CANVAS_API_URL") or "").strip().rstrip("/")
+        self.api_url = (
+            api_url or os.getenv("CANVAS_API_URL") or CANVAS_API_URL_PADRAO
+        ).strip().rstrip("/")
         self.api_key = api_key or os.getenv("CANVAS_API_KEY")
         self.raw_dir = Path(raw_dir)
         self.state_dir = Path(state_dir)

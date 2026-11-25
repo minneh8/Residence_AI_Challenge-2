@@ -12,45 +12,58 @@ if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
 from langgraph.graph import END, START, StateGraph
+from src.state import GlauxState
+from src.agente_orquestrador.node import (
+    orchestrator_node,
+    rag_index_node,
+    route_from_orchestrator,
+)
 from src.agente_canvas.node import canvas_agent_node
 from src.agente_canvas.service import CanvasAuthError
 from src.agente_gerador.apresentacao import formatar, resultado_do_estado
 from src.agente_gerador.node import gerador_questoes_node
 from src.agente_gerador.service import TETO_QUESTOES
 from src.agente_tutor.node import tutor_agent_node
-from src.agente_tutor.service import frases_sem_citacao
-from src.state import GlauxState
-
-
-def _formatar_fontes(fontes: list) -> str:
-    """Formata sources_used (List[Dict]) como "[arquivo, p.X-Y]"."""
-    partes = []
-    for f in fontes:
-        if isinstance(f, dict):
-            partes.append(f"[{f.get('arquivo')}, p.{f.get('pagina')}-{f.get('pagina_fim')}]")
-        else:
-            partes.append(str(f))
-    return ", ".join(partes) if partes else "nenhuma"
 
 
 def build_glaux_graph():
-    """Constrói o grafo orquestrador dos agentes do Projeto Glaux."""
+    """Constroi e compila o grafo dinamico orquestrado do Projeto Glaux."""
     workflow = StateGraph(GlauxState)
 
+    # 1. Registra todos os nos oficiais (conectando o gerador real da main)
+    workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("canvas_agent", canvas_agent_node)
+    workflow.add_node("rag_index_node", rag_index_node)
     workflow.add_node("tutor_agent", tutor_agent_node)
-    # Sem --questoes, o gerador devolve {} e não chama nem o RAG nem o LLM.
-    workflow.add_node("gerador_questoes", gerador_questoes_node)
+    workflow.add_node("question_generator_agent", gerador_questoes_node)
 
-    workflow.add_edge(START, "canvas_agent")
-    workflow.add_edge("canvas_agent", "tutor_agent")
-    workflow.add_edge("tutor_agent", "gerador_questoes")
-    workflow.add_edge("gerador_questoes", END)
+    # 2. Entrada unica sempre passa pelo Orquestrador
+    workflow.add_edge(START, "orchestrator")
+
+    # 3. Roteamento condicional a partir do Orquestrador
+    workflow.add_conditional_edges(
+        "orchestrator",
+        route_from_orchestrator,
+        {
+            "canvas_agent": "canvas_agent",
+            "rag_index_node": "rag_index_node",
+            "tutor_agent": "tutor_agent",
+            "question_generator_agent": "question_generator_agent",
+            "END": END,
+        },
+    )
+
+    # 4. Todos os agentes devolvem o controle ao Orquestrador ao concluir
+    workflow.add_edge("canvas_agent", "orchestrator")
+    workflow.add_edge("rag_index_node", "orchestrator")
+    workflow.add_edge("tutor_agent", "orchestrator")
+    workflow.add_edge("question_generator_agent", "orchestrator")
 
     return workflow.compile()
 
 
 def main() -> int:
+    inicio = time.perf_counter()
     parser = argparse.ArgumentParser(
         description="Esteira Glaux: Canvas + RAG + Tutor + Gerador de Questões."
     )
@@ -78,80 +91,44 @@ def main() -> int:
             parser.error(f"--questoes deve ser um número de 1 a {TETO_QUESTOES}.")
 
     load_dotenv()
-    sys.stdout.reconfigure(errors="replace")
 
+    # Define a acao do Orquestrador conforme os argumentos passados no CLI
+    acao_inicial = "GERAR_QUESTOES" if args.questoes is not None else "FLUXO_COMPLETO"
+
+    app = build_glaux_graph()
     initial_state = GlauxState(
         user_id="estudante_glaux",
         canvas_api_key=os.getenv("CANVAS_API_KEY"),
+        action=acao_inicial,
         tema=args.tema,
         curso_alvo=args.curso,
         sync_completo=args.completo,
         quantidade_questoes=args.questoes,
     )
 
-    print(" Executando esteira completa do Glaux...\n")
-    inicio = time.perf_counter()
-    app = build_glaux_graph()
+    print("Iniciando execucao orquestrada do Projeto Glaux...\n")
     try:
         final_state = app.invoke(initial_state)
     except CanvasAuthError as e:
-        print(f"\n [ERRO] {e}")
+        print(f"Erro de autenticacao no Canvas: {e}")
         return 1
 
-    # --------------------------------------------------------------------------
-    #  CRONOGRAMA DE TAREFAS
-    # --------------------------------------------------------------------------
-    print("\n================  CRONOGRAMA DE TAREFAS ================")
-    assignments = final_state.get("assignments", [])
-    for task in assignments:
-        t = task if isinstance(task, dict) else task.model_dump()
-        dias = t.get("days_remaining")
-        dias_str = f"{dias} dias restantes" if dias is not None else "Sem prazo"
-        print(f"[{t.get('priority_level')}] {t.get('course_name')} | {t.get('title')}")
-        print(f"    {dias_str} | {t.get('action_recommendation')}\n")
+    # Remove credenciais sensiveis antes de salvar em disco
+    safe_output = {k: v for k, v in final_state.items() if k != "canvas_api_key"}
 
-    # --------------------------------------------------------------------------
-    #  RESUMOS DAS MATÉRIAS (+ auditoria de citações)
-    # --------------------------------------------------------------------------
-    print("\n================  RESUMOS DAS MATÉRIAS ================")
-    summaries = final_state.get("summaries", [])
-    for summary in summaries:
-        s = summary if isinstance(summary, dict) else summary.model_dump()
-        print(f"\n Disciplina: {s.get('course_name')}")
-        print(f" Título: {s.get('topic_title')}")
-        print(f" Fontes Utilizadas: {_formatar_fontes(s.get('sources_used', []))}")
-        print("--- CONTEÚDO DO RESUMO ---")
-        print(s.get("summary_text"))
-        sem_citacao = frases_sem_citacao(s.get("summary_text", ""))
-        if sem_citacao:
-            print(f"--- ⚠️ FRASES SEM CITAÇÃO ({len(sem_citacao)}) ---")
-            for frase in sem_citacao:
-                print(f"    • {frase}")
-        print("------------------------------------------------------------------")
-
-    # --------------------------------------------------------------------------
-    #  SALVA O RESULTADO DO TUTOR EM JSON
-    # --------------------------------------------------------------------------
     output_path = Path("data/processed/tutor_output.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    clean_output = {
-        "user_id": final_state.get("user_id"),
-        "courses": final_state.get("courses", []),
-        "assignments": final_state.get("assignments", []),
-        "summaries": final_state.get("summaries", []),
-        "downloaded_files": final_state.get("downloaded_files", []),
-    }
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(clean_output, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(safe_output, f, ensure_ascii=False, indent=2, default=str)
 
-    print(f"\n Saída do Agente Tutor salva em: {output_path}")
+    print(f"\nSaida do Agente Tutor salva em: {output_path}")
 
     # --------------------------------------------------------------------------
-    #  QUESTÕES DE ESTUDO (só com --questoes)
+    #  QUESTOES DE ESTUDO (so com --questoes)
     # --------------------------------------------------------------------------
     resultado_questoes = resultado_do_estado(final_state)
     if resultado_questoes is not None:
-        print("\n================  QUESTÕES DE ESTUDO ================")
+        print("\n================ QUESTOES DE ESTUDO ================")
         print(formatar(resultado_questoes))
         questoes_path = Path("data/processed/questoes_output.json")
         questoes_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,9 +142,9 @@ def main() -> int:
         }
         with open(questoes_path, "w", encoding="utf-8") as f:
             json.dump(questoes_output, f, ensure_ascii=False, indent=2, default=str)
-        print(f"\n Questões salvas em: {questoes_path}")
+        print(f"\nQuestoes salvas em: {questoes_path}")
 
-    print(f" Tempo total: {time.perf_counter() - inicio:.1f} s")
+    print(f"Tempo total: {time.perf_counter() - inicio:.1f} s")
     return 0
 
 
