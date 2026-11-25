@@ -4,8 +4,10 @@ Tudo roda offline: os agentes são substituídos por dublês que só registram a
 ordem das chamadas. Nada acessa o Canvas, o Groq, o RAG, o .env ou data/raw real.
 """
 
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -218,3 +220,128 @@ def test_erro_generico_sem_stack_trace(tmp_path):
         "SINCRONIZAR_CANVAS", 1, raw_dir=str(tmp_path), agentes=agentes)
     assert "algo inesperado" in res["erro"]
     assert res["erro"].startswith("Não foi possível concluir a ação")
+
+
+# --------------------------------------------------------------------------
+# Resumos com cache: a LLM só é chamada no clique, nunca ao abrir/trocar nem no cache
+# --------------------------------------------------------------------------
+class TutorFalso:
+    """Tutor dublê: conta as chamadas à LLM e devolve trechos/resumo fixos."""
+
+    def __init__(self):
+        self.chamadas_llm = 0
+
+    def buscar_tema(self, course_id, tema):
+        return [{"arquivo": "aula03.pdf", "pagina": 1, "pagina_fim": 1,
+                 "texto": "t", "score": 0.9}]
+
+    def buscar_tarefa(self, course_id, titulo, descricao=None):
+        return [{"arquivo": "aula03.pdf", "pagina": 2, "pagina_fim": 2,
+                 "texto": "t", "score": 0.8}]
+
+    def resumir_trechos(self, course_id, course_name, trechos, foco, topic_title):
+        self.chamadas_llm += 1  # esta é a (única) chamada à LLM
+        resumo = SimpleNamespace(
+            course_id=course_id, course_name=course_name, topic_title=topic_title,
+            summary_text="Resumo [aula03.pdf, p.1-1].",
+            sources_used=[{"arquivo": t["arquivo"], "pagina": t["pagina"],
+                           "pagina_fim": t["pagina_fim"]} for t in trechos],
+        )
+        return resumo, {"modelo": "fake", "tokens": None, "chamadas_llm": 1}
+
+
+def _trechos_fake(course_id, arquivo, max_trechos):
+    return [{"arquivo": arquivo, "pagina": 1, "pagina_fim": 1, "texto": "a", "score": None},
+            {"arquivo": arquivo, "pagina": 2, "pagina_fim": 2, "texto": "b", "score": None}]
+
+
+def test_resumir_arquivo_usa_cache_sem_chamar_llm_de_novo(tmp_path):
+    cache = tmp_path / "resumos.json"
+    tutor = TutorFalso()
+    r1 = acoes.resumir_arquivo(93527, "aula03.pdf", "C",
+                               tutor=tutor, trechos_fn=_trechos_fake, cache_path=cache)
+    assert r1["ok"] and r1["em_cache"] is False
+    assert tutor.chamadas_llm == 1
+
+    r2 = acoes.resumir_arquivo(93527, "aula03.pdf", "C",
+                               tutor=tutor, trechos_fn=_trechos_fake, cache_path=cache)
+    assert r2["em_cache"] is True
+    assert tutor.chamadas_llm == 1  # veio do cache: nenhuma nova chamada
+    assert r2["summary_text"] == r1["summary_text"]
+
+
+def test_gerar_de_novo_forca_nova_chamada(tmp_path):
+    cache = tmp_path / "resumos.json"
+    tutor = TutorFalso()
+    acoes.resumir_arquivo(93527, "aula03.pdf", "C",
+                          tutor=tutor, trechos_fn=_trechos_fake, cache_path=cache)
+    r = acoes.resumir_arquivo(93527, "aula03.pdf", "C", forcar=True,
+                              tutor=tutor, trechos_fn=_trechos_fake, cache_path=cache)
+    assert r["em_cache"] is False
+    assert tutor.chamadas_llm == 2
+
+
+def test_resumir_tema_usa_cache(tmp_path):
+    cache = tmp_path / "resumos.json"
+    tutor = TutorFalso()
+    r1 = acoes.resumir_tema(93527, "hipótese nula", "C", tutor=tutor, cache_path=cache)
+    assert r1["ok"] and r1["em_cache"] is False and tutor.chamadas_llm == 1
+    r2 = acoes.resumir_tema(93527, "hipótese nula", "C", tutor=tutor, cache_path=cache)
+    assert r2["em_cache"] is True and tutor.chamadas_llm == 1
+
+
+def test_resumir_arquivo_sem_trechos_nao_chama_llm(tmp_path):
+    tutor = TutorFalso()
+    r = acoes.resumir_arquivo(1, "x.pdf", "C", tutor=tutor,
+                              trechos_fn=lambda *a, **k: [], cache_path=tmp_path / "c.json")
+    assert r["ok"] is False and tutor.chamadas_llm == 0
+
+
+def test_abrir_pagina_e_trocar_curso_nao_chamam_llm(tmp_path, monkeypatch):
+    """Abrir a página e trocar de curso só leem dados locais; nada chama a LLM."""
+    contador = {"llm": 0}
+
+    class TutorEspiao:
+        def resumir_trechos(self, *a, **k):
+            contador["llm"] += 1
+            raise AssertionError("A LLM não deveria ser chamada ao abrir/trocar de curso.")
+
+        def buscar_tema(self, *a, **k):
+            return []
+
+        def buscar_tarefa(self, *a, **k):
+            return []
+
+    # Se qualquer caminho tentar criar o tutor real e chamar a LLM, o espião acusa.
+    monkeypatch.setattr(acoes, "_tutor_padrao", lambda: TutorEspiao())
+
+    for cid in (111, 222):
+        pasta = tmp_path / str(cid)
+        pasta.mkdir()
+        (pasta / "_arquivos.json").write_text(json.dumps(
+            {"f1": {"nome": "a.pdf", "categoria": "slides", "paginas": 3, "origem": "regra"}}),
+            encoding="utf-8")
+        (pasta / "assignments.json").write_text(json.dumps(
+            [{"name": "Tarefa", "due_at": None, "submitted": False}]), encoding="utf-8")
+
+    # Sequência de "abrir a página" e "trocar de curso" (111 -> 222 -> 111).
+    for cid in (111, 222, 111):
+        acoes.cursos_locais(str(tmp_path))
+        acoes.carregar_materiais(cid, str(tmp_path))
+        acoes.carregar_prazos(cid, str(tmp_path))
+        acoes.resumo_estatisticas(cid, str(tmp_path))
+
+    assert contador["llm"] == 0
+
+
+def test_estatisticas_contam_pdfs_por_categoria(tmp_path):
+    pasta = tmp_path / "55"
+    pasta.mkdir()
+    (pasta / "_arquivos.json").write_text(json.dumps({
+        "a": {"nome": "aula00.pdf", "categoria": "slides", "paginas": 10, "origem": "regra"},
+        "b": {"nome": "aula01.pdf", "categoria": "slides", "paginas": 12, "origem": "regra"},
+        "c": {"nome": "lista01.pdf", "categoria": "listas", "paginas": 2, "origem": "regra"},
+    }), encoding="utf-8")
+    stats = acoes.resumo_estatisticas(55, str(tmp_path))
+    assert stats["total_pdfs"] == 3
+    assert stats["por_categoria"] == {"listas": 1, "slides": 2}

@@ -4,8 +4,13 @@ Rodar a partir da raiz do projeto:
 
     .\\.venv\\Scripts\\streamlit.exe run app/streamlit_app.py
 
-A interface só conhece src/interface/acoes.py; os agentes (Canvas, Tutor,
-Gerador) e o RAG ficam atrás dessa camada.
+Esta camada só DESENHA a tela: a lógica (sincronização, resumos, cache,
+estatísticas) vive em src/interface/acoes.py e a formatação em
+src/interface/formatacao.py. O front final reaproveita as duas.
+
+Regra de ouro: a LLM (Groq) só é chamada dentro do clique de um botão. Abrir a
+página, trocar de aba ou de curso e qualquer rerun NÃO chamam a LLM. Os
+resultados ficam em st.session_state; o modelo de embeddings carrega sob demanda.
 """
 
 import sys
@@ -18,66 +23,127 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.agente_canvas.service import CanvasAuthError, CanvasUnavailableError  # noqa: E402
 from src.interface import acoes  # noqa: E402
+from src.interface import formatacao as fmt  # noqa: E402
 
 st.set_page_config(page_title="Glaux", page_icon="🦉", layout="wide")
 
-NOMES_AGENTES = {"canvas": "Canvas", "tutor": "Tutor", "gerador": "Gerador"}
+# Único bloco de CSS: só ajusta espaçamento e arredonda os cartões.
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 2.4rem; padding-bottom: 3rem; max-width: 1200px;}
+      [data-testid="stVerticalBlockBorderWrapper"] {border-radius: 12px;}
+      [data-testid="stMetricValue"] {font-size: 1.35rem;}
+      h2, h3 {margin-top: .4rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+ORDEM_CATEGORIAS = ["slides", "listas", "trabalho", "livros", "outros"]
+LABEL_CATEGORIA = {"slides": "Slides", "listas": "Listas", "trabalho": "Trabalho",
+                   "livros": "Livros", "outros": "Outros"}
+COR_STATUS = {"entregue": "green", "pendente": "orange", "atrasada": "red"}
+COR_ESTADO = {"novo": "blue", "recuperado": "gray", "atualizado": "orange",
+              "migrado": "gray"}
+TITULO_SECAO = {"atrasadas": "Atrasadas", "hoje": "Hoje",
+                "proximos": "Próximos 7 dias", "adiante": "Mais adiante"}
 
 
 # --------------------------------------------------------------------------
-# Modelo de embeddings: uma carga por processo, reaproveitada entre reruns
+# Infraestrutura leve (modelo, session_state, selos)
 # --------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def carregar_modelo_embeddings():
-    """Carrega o modelo E5 uma única vez (compartilhado entre as sessões)."""
     from src.rag.embeddings import carregar_modelo
 
     return carregar_modelo()
 
 
 def garantir_modelo() -> None:
-    """Garante o modelo carregado antes de qualquer busca no RAG."""
+    """Carrega o modelo E5 (só antes de uma busca semântica: tema/tarefa)."""
     with st.spinner("Carregando o modelo de embeddings (só na primeira vez)..."):
         carregar_modelo_embeddings()
 
 
-def mensagem_erro(e: Exception) -> str:
-    """Transforma exceções em mensagens amigáveis (sem stack trace)."""
-    if isinstance(e, CanvasAuthError):  # inclui CanvasConfigError
-        return str(e)
-    if isinstance(e, CanvasUnavailableError):
-        return acoes.MSG_ERRO_CANVAS_OFF
-    return f"Não foi possível concluir: {e}"
+def estado(chave: str) -> dict:
+    if chave not in st.session_state:
+        st.session_state[chave] = {}
+    return st.session_state[chave]
 
 
-def rodape_execucao(resultado: dict) -> None:
-    """Rodapé com os agentes executados e o tempo de cada um."""
-    partes = [
-        f"{NOMES_AGENTES.get(a, a)} ({resultado['tempos'].get(a, 0):.1f}s)"
-        for a in resultado["agentes"]
-    ]
-    if partes:
-        st.caption(
-            "Agentes executados: " + " → ".join(partes)
-            + f" · total {resultado['tempo_total']:.1f}s"
-        )
+def selo(texto: str, cor: str) -> str:
+    """Markdown de um selo colorido nativo do Streamlit."""
+    return f":{cor}-badge[{texto}]"
 
 
 # --------------------------------------------------------------------------
-# Barra lateral: usuário, curso e sincronização
+# Render compartilhado de resumos (aula / tema / tarefa)
+# --------------------------------------------------------------------------
+def render_detalhes_resumo(det: dict) -> None:
+    with st.expander("Detalhes técnicos", expanded=False):
+        origem = ("cache (nenhuma chamada à LLM)" if det.get("em_cache")
+                  else f"{det.get('chamadas_llm', 0)} chamada(s) à LLM")
+        st.write(f"**Origem:** {origem} · **tempo:** {det.get('tempo', 0):.1f}s")
+        if det.get("gerado_em"):
+            st.write(f"**Gerado em:** {fmt.data_hora(det['gerado_em'])}")
+        if det.get("modelo"):
+            st.write(f"**Agente:** Tutor · **modelo:** {det['modelo']}")
+        tokens = det.get("tokens")
+        if tokens:
+            st.write(f"**Tokens:** entrada {fmt.numero_br(tokens.get('entrada'))} · "
+                     f"saída {fmt.numero_br(tokens.get('saida'))} · "
+                     f"total {fmt.numero_br(tokens.get('total'))}")
+        trechos = det.get("trechos") or []
+        if trechos:
+            st.write(f"**Trechos usados ({len(trechos)}):**")
+            st.table([
+                {"Arquivo": t["arquivo"],
+                 "Páginas": f"{t['pagina']}-{t['pagina_fim']}",
+                 "Score": f"{t['score']:.3f}" if t.get("score") is not None else "—"}
+                for t in trechos
+            ])
+
+
+def render_resultado_resumo(res: dict) -> None:
+    with st.container(border=True):
+        if res.get("erro"):
+            st.error(res["erro"])
+            render_detalhes_resumo(res.get("detalhes", {}))
+            return
+
+        cab = st.columns([5, 1])
+        if res.get("topic_title"):
+            cab[0].markdown(f"#### {res['topic_title']}")
+        if res.get("em_cache"):
+            cab[1].markdown(selo("resumo salvo", "green"))
+
+        if res.get("recusa"):
+            st.warning(res["summary_text"])
+        else:
+            st.markdown(res.get("summary_text", ""))
+
+        fontes = res.get("sources_used") or []
+        if fontes:
+            st.caption("Fontes: " + "  ·  ".join(
+                f"{f['arquivo']} p.{f['pagina']}-{f['pagina_fim']}" for f in fontes))
+
+        render_detalhes_resumo(res.get("detalhes", {}))
+
+
+# --------------------------------------------------------------------------
+# Barra lateral
 # --------------------------------------------------------------------------
 def barra_lateral() -> tuple[int | None, str | None]:
     st.sidebar.title("🦉 Glaux")
 
-    # Usuário autenticado (nome vindo do Canvas; o token nunca aparece).
     if "nome_usuario" not in st.session_state:
         try:
             st.session_state.nome_usuario = acoes.autenticar()
         except Exception as e:
             st.session_state.nome_usuario = None
-            st.session_state.erro_auth = mensagem_erro(e)
+            st.session_state.erro_auth = acoes.erro_amigavel(e)
     if st.session_state.get("nome_usuario"):
         st.sidebar.success(f"Autenticado: {st.session_state.nome_usuario}")
     else:
@@ -85,187 +151,288 @@ def barra_lateral() -> tuple[int | None, str | None]:
 
     st.sidebar.divider()
 
-    # Seleção do curso: pastas em data/raw + opção de listar do Canvas.
-    if st.sidebar.button("Listar cursos do Canvas"):
-        try:
-            st.session_state.cursos_canvas = acoes.listar_cursos_canvas()
-        except Exception as e:
-            st.sidebar.error(mensagem_erro(e))
-
-    nomes_canvas = {c["id"]: c["name"] for c in st.session_state.get("cursos_canvas", [])}
-    ids = sorted(set(acoes.cursos_locais()) | set(nomes_canvas))
-
+    nomes = acoes.nomes_cursos()
+    ids = acoes.cursos_locais()
     if not ids:
-        st.sidebar.info("Nenhum curso local. Use 'Listar cursos do Canvas' e sincronize.")
+        if st.sidebar.button("Buscar matérias no Canvas"):
+            _sincronizar(None, None, todas=True)
+        st.sidebar.info("Nenhuma matéria local ainda. Sincronize o Canvas.")
         return None, None
 
     def rotulo(cid: int) -> str:
-        nome = nomes_canvas.get(cid)
-        return f"{cid} — {nome}" if nome else f"{cid} — (disciplina local)"
+        nome = nomes.get(cid)
+        return fmt.nome_materia(nome) if nome else f"Curso {cid}"
 
-    curso_id = st.sidebar.selectbox("Curso", ids, format_func=rotulo)
-    curso_nome = nomes_canvas.get(curso_id)
+    curso_id = st.sidebar.selectbox("Matéria", ids, format_func=rotulo)
+    curso_nome = nomes.get(curso_id)
 
     st.sidebar.divider()
+    todas = st.sidebar.checkbox("Todas as matérias",
+                                help="Sincroniza todos os cursos, não só o selecionado.")
+    forcar = st.sidebar.checkbox("Forçar varredura completa",
+                                 help="Percorre todos os arquivos, sem parada antecipada.")
+    if st.sidebar.button("Sincronizar", type="primary", use_container_width=True):
+        _sincronizar(None if todas else curso_id, curso_nome, todas=todas, forcar=forcar)
 
-    # Sincronização.
-    forcar = st.sidebar.checkbox(
-        "Forçar varredura completa",
-        help="Percorre todos os arquivos do Canvas, sem a parada antecipada.",
-    )
-    if st.sidebar.button("Sincronizar Canvas", type="primary"):
-        with st.spinner("Sincronizando com o Canvas..."):
-            st.session_state.ultima_sync = acoes.executar_acao(
-                "SINCRONIZAR_CANVAS", curso_id, forcar=forcar, course_name=curso_nome
-            )
+    quando = acoes.ultima_sincronizacao(curso_id)
+    st.sidebar.caption(
+        f"Última sincronização: {fmt.ha_quanto_tempo(quando)}" if quando
+        else "Ainda não sincronizado nesta matéria.")
 
     return curso_id, curso_nome
 
 
+def _sincronizar(curso_id, curso_nome, *, todas=False, forcar=False) -> None:
+    with st.spinner("Sincronizando com o Canvas..."):
+        res = acoes.executar_acao("SINCRONIZAR_CANVAS", curso_id,
+                                  forcar=forcar, course_name=curso_nome)
+    st.session_state.ultima_sync = res
+    if res["erro"]:
+        st.toast(res["erro"], icon="⚠️")
+        return
+    resumos = (res["resultados"].get("canvas") or {}).get("resumos", [])
+    total_novos = sum(len(r.get("novos_itens", [])) + len(r.get("atualizados_itens", []))
+                      for r in resumos)
+    if total_novos:
+        st.toast(f"{fmt.plural(total_novos, 'material novo', 'materiais novos')} "
+                 "sincronizado(s).", icon="✅")
+    else:
+        st.toast("Tudo em dia — nenhum material novo.", icon="✅")
+
+
 # --------------------------------------------------------------------------
-# Resultado da sincronização
+# Cartão de resultado da sincronização (na página)
 # --------------------------------------------------------------------------
-def mostrar_sincronizacao() -> None:
+def cartao_sincronizacao() -> None:
     res = st.session_state.get("ultima_sync")
     if not res:
         return
-    st.subheader("Resultado da sincronização")
     if res["erro"]:
-        st.error(res["erro"])
-        rodape_execucao(res)
+        with st.container(border=True):
+            st.error(res["erro"])
         return
 
-    resumos = (res["resultados"].get("canvas") or {}).get("resumos", [])
-    for r in resumos:
-        st.markdown(f"**{r['curso']}** (curso {r['course_id']})")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Novos", r["novos"])
-        c2.metric("Atualizados", r["atualizados"])
-        c3.metric("Migrados", r["migrados"])
-        c4.metric("Pulados", r["pulados"])
-        c5.metric("Pendentes LLM", r["pendentes_llm"])
-        col_a, col_b = st.columns(2)
-        col_a.write(f"Requisições ao Canvas: **{r['requisicoes']}**")
-        tempo = res.get("tempo_sincronizacao")
-        col_b.write(f"Tempo da sincronização: **{tempo:.1f}s**" if tempo is not None else "")
-        if r["categorias"]:
-            st.write("Por categoria: " + ", ".join(
-                f"{cat}: {qtd}" for cat, qtd in r["categorias"].items()))
-        if r.get("parou_em"):
-            st.caption(f"Parada antecipada em: {r['parou_em']}")
-    rodape_execucao(res)
-    st.divider()
+    tempo = res.get("tempo_sincronizacao")
+    tempo_txt = f"{tempo:.1f}".replace(".", ",") + " s" if tempo is not None else "—"
+    for r in (res["resultados"].get("canvas") or {}).get("resumos", []):
+        novos = r.get("novos_itens", []) + r.get("atualizados_itens", [])
+        bloqueados = r.get("bloqueados_nomes", [])
+        pendentes = r.get("pendentes_llm_nomes", [])
+
+        with st.container(border=True):
+            if novos:
+                st.markdown(f"**Material novo em {fmt.nome_materia(r['curso'])}**")
+                for it in novos:
+                    cor = COR_ESTADO.get(it["estado"], "gray")
+                    st.markdown(
+                        f"{selo(it['estado'], cor)} **{fmt.nome_arquivo(it['nome'])}** "
+                        f"· {it['categoria']}")
+            else:
+                st.markdown(f"✅ **Tudo em dia** — nenhum material novo ({tempo_txt}).")
+
+            if bloqueados or pendentes:
+                avisos = []
+                if bloqueados:
+                    avisos.append("Bloqueados para o aluno: " + ", ".join(bloqueados))
+                if pendentes:
+                    avisos.append("Classificação pendente da LLM: " + ", ".join(pendentes))
+                st.warning("  \n".join(avisos))
+
+            with st.expander("Detalhes técnicos", expanded=False):
+                st.write(f"**Requisições ao Canvas:** {fmt.numero_br(r.get('requisicoes', 0))}")
+                st.write(f"**Tempo só do Canvas:** {tempo_txt}")
+                st.write(f"**Reindexou o RAG:** {'sim' if r.get('reindexou') else 'não'}")
+                st.write(f"**Chunks do curso:** {fmt.numero_br(r.get('chunks'))}")
+                if r.get("parou_em"):
+                    st.write(f"**Listagem parou em:** {r['parou_em']}")
 
 
 # --------------------------------------------------------------------------
-# Abas
+# Cabeçalho: nome da matéria + métricas
 # --------------------------------------------------------------------------
-def aba_materiais(curso_id: int) -> None:
+def cabecalho(curso_id: int, curso_nome: str | None) -> None:
+    st.header(fmt.nome_materia(curso_nome) if curso_nome else f"Curso {curso_id}")
+    stats = acoes.resumo_estatisticas(curso_id)
+    por_cat = stats["por_categoria"]
+    quando = acoes.ultima_sincronizacao(curso_id)
+
+    c = st.columns(5)
+    c[0].metric("PDFs", fmt.numero_br(stats["total_pdfs"]))
+    c[1].metric("Slides", fmt.numero_br(por_cat.get("slides", 0)))
+    c[2].metric("Listas", fmt.numero_br(por_cat.get("listas", 0)))
+    c[3].metric("Chunks", fmt.numero_br(stats["total_chunks"]))
+    c[4].metric("Sincronizado", fmt.ha_quanto_tempo(quando) if quando else "nunca")
+
+
+# --------------------------------------------------------------------------
+# Aba Materiais
+# --------------------------------------------------------------------------
+def aba_materiais(curso_id: int, curso_nome: str | None) -> None:
     materiais = acoes.carregar_materiais(curso_id)
     if not materiais:
         st.info("Nenhum material catalogado. Sincronize o Canvas primeiro.")
         return
-    for categoria, arquivos in materiais.items():
-        st.subheader(f"{categoria} ({len(arquivos)})")
-        st.table([
-            {
-                "Arquivo": a["nome"],
-                "Páginas": a["paginas"] if a["paginas"] is not None else "—",
-                "Classificação": a["classificado_por"],
-                "Origem": a["origem"],
-            }
-            for a in arquivos
-        ])
+
+    cache = estado("resumos_arquivo")
+    categorias = [c for c in ORDEM_CATEGORIAS if c in materiais]
+    categorias += [c for c in materiais if c not in ORDEM_CATEGORIAS]
+
+    for categoria in categorias:
+        arquivos = materiais[categoria]
+        st.subheader(f"{LABEL_CATEGORIA.get(categoria, categoria.title())} ({len(arquivos)})")
+        colunas = st.columns(3)
+        for i, a in enumerate(arquivos):
+            nome = a["nome"]
+            with colunas[i % 3].container(border=True):
+                st.markdown(f"**{fmt.nome_arquivo(nome)}**")
+                paginas = a["paginas"]
+                selo_cls = (selo("IA", "violet") if a["classificado_por"] == "LLM"
+                            else selo("regra", "gray"))
+                pag_txt = f"{fmt.plural(paginas, 'página')}" if paginas else "—"
+                st.caption(f"{pag_txt} · {selo_cls}")
+                if categoria == "slides":
+                    if st.button("Resumir esta aula", key=f"mat_{curso_id}_{nome}",
+                                 use_container_width=True):
+                        with st.spinner(f"Resumindo {fmt.nome_arquivo(nome)}..."):
+                            cache[(curso_id, nome)] = acoes.resumir_arquivo(
+                                curso_id, nome, curso_nome)
+                        st.session_state.aula_sel = (curso_id, nome)
+
+    sel = st.session_state.get("aula_sel")
+    if sel and sel[0] == curso_id and sel in cache:
+        st.divider()
+        st.subheader(f"Resumo — {fmt.nome_arquivo(sel[1])}")
+        render_resultado_resumo(cache[sel])
+        if st.button("Gerar de novo", key=f"regen_{sel[1]}"):
+            with st.spinner("Gerando um novo resumo..."):
+                cache[sel] = acoes.resumir_arquivo(curso_id, sel[1], curso_nome, forcar=True)
+            st.rerun()
 
 
+# --------------------------------------------------------------------------
+# Aba Resumo por tema
+# --------------------------------------------------------------------------
 def aba_resumo(curso_id: int, curso_nome: str | None) -> None:
-    tema = st.text_input("Tema do resumo", key="tema_resumo",
-                         placeholder="ex.: hipótese nula")
-    if st.button("Gerar resumo", key="btn_resumo"):
+    cache = estado("resumos_tema")
+    col = st.columns([4, 1])
+    tema = col[0].text_input("Tema do resumo", key="tema_resumo",
+                             placeholder="ex.: hipótese nula", label_visibility="collapsed")
+    if col[1].button("Resumir", type="primary", use_container_width=True):
         if not tema.strip():
             st.warning("Escreva um tema para gerar o resumo.")
-            return
-        garantir_modelo()
-        with st.spinner("O Tutor está gerando o resumo..."):
-            res = acoes.executar_acao("GERAR_RESUMO", curso_id, tema=tema,
-                                      course_name=curso_nome)
-        if res["erro"]:
-            st.error(res["erro"])
         else:
-            summaries = (res["resultados"].get("tutor") or {}).get("summaries", [])
-            if not summaries:
-                st.warning("O Tutor não retornou resumo. Verifique o índice do curso.")
-            for s in summaries:
-                st.markdown(f"### {s.get('topic_title', '')}")
-                st.markdown(s.get("summary_text", ""))
-                fontes = s.get("sources_used", [])
-                if fontes:
-                    st.markdown("**Fontes:**")
-                    for f in fontes:
-                        st.markdown(
-                            f"- `{f['arquivo']}`, p.{f['pagina']}-{f['pagina_fim']}")
-        rodape_execucao(res)
+            garantir_modelo()
+            with st.spinner("O Tutor está gerando o resumo..."):
+                cache[(curso_id, tema.strip())] = acoes.resumir_tema(curso_id, tema, curso_nome)
+
+    chave = (curso_id, tema.strip())
+    if tema.strip() and chave in cache:
+        render_resultado_resumo(cache[chave])
 
 
-def aba_questoes(curso_id: int, curso_nome: str | None) -> None:
-    tema = st.text_input("Tema das questões", key="tema_quest",
-                         placeholder="ex.: hipótese nula")
-    quantidade = st.number_input("Quantidade", min_value=1, max_value=10, value=3, step=1)
-    if st.button("Gerar questões", key="btn_quest"):
-        if not tema.strip():
-            st.warning("Escreva um tema para gerar as questões.")
-            return
-        garantir_modelo()
-        with st.spinner("O Gerador está montando as questões..."):
-            res = acoes.executar_acao("GERAR_QUESTOES", curso_id, tema=tema,
-                                      quantidade=int(quantidade), course_name=curso_nome)
-        if res["erro"]:
-            st.error(res["erro"])
-        else:
-            gerador = res["resultados"].get("gerador") or {}
-            if gerador.get("status") != "ok":
-                st.warning(gerador.get("mensagem") or "Não foi possível gerar as questões.")
-            for i, q in enumerate(gerador.get("questoes", []), start=1):
-                st.markdown(f"**Questão {i} ({q.get('assunto', '')})**")
-                st.markdown(q.get("enunciado", ""))
-                if q.get("tipo") == "multipla_escolha":
-                    for letra, texto in q.get("alternativas", {}).items():
-                        st.markdown(f"- **{letra})** {texto}")
-                    st.caption(f"Resposta correta: {q.get('correta')}")
-                ref = q.get("trecho_referencia", {})
-                if ref:
-                    st.caption(
-                        f"Fonte: {ref.get('arquivo')}, "
-                        f"p.{ref.get('pagina')}-{ref.get('pagina_fim')}")
-                st.divider()
-        rodape_execucao(res)
+# --------------------------------------------------------------------------
+# Aba Prazos
+# --------------------------------------------------------------------------
+def _cartao_tarefa(curso_id, curso_nome, p, cache) -> None:
+    status = fmt.status_prazo(p["due_at"], p["submitted"])
+    with st.container(border=True):
+        linha = st.columns([5, 2])
+        linha[0].markdown(f"**{fmt.titulo_tarefa(p['nome'])}**")
+        linha[1].markdown(selo(status.capitalize(), COR_STATUS[status]))
+        st.caption(fmt.data_relativa(p["due_at"], submitted=p["submitted"]))
+
+        if not p["submitted"]:
+            nome = p["nome"]
+            chave = (curso_id, nome)
+            if st.button("Resumir o conteúdo desta tarefa", key=f"tar_{curso_id}_{nome}"):
+                garantir_modelo()
+                with st.spinner("O Tutor está resumindo o conteúdo da tarefa..."):
+                    cache[chave] = acoes.resumir_tarefa(
+                        curso_id, nome, p.get("descricao"), curso_nome)
+            if chave in cache:
+                render_resultado_resumo(cache[chave])
 
 
-def aba_prazos(curso_id: int) -> None:
+def aba_prazos(curso_id: int, curso_nome: str | None) -> None:
     prazos = acoes.carregar_prazos(curso_id)
     if not prazos:
         st.info("Nenhuma tarefa em assignments.json. Sincronize o Canvas primeiro.")
         return
-    proximos = [p for p in prazos if p["proximo"]]
-    if proximos:
-        st.success(f"{len(proximos)} tarefa(s) nos próximos 7 dias.")
+
+    cache = estado("resumos_tarefa")
+    secoes = {k: [] for k in ("atrasadas", "hoje", "proximos", "adiante", "entregues")}
     for p in prazos:
-        dias = p["days_remaining"]
-        if p["proximo"]:
-            rotulo_dias = f"⚠️ faltam {dias} dia(s)"
-        elif dias is None:
-            rotulo_dias = "sem data"
-        elif dias < 0:
-            rotulo_dias = f"vencida há {abs(dias)} dia(s)"
+        secoes[fmt.secao_prazo(p["due_at"], p["submitted"])].append(p)
+
+    for chave in ("atrasadas", "hoje", "proximos", "adiante"):
+        tarefas = secoes[chave]
+        if not tarefas:
+            continue
+        st.subheader(f"{TITULO_SECAO[chave]} ({len(tarefas)})")
+        for p in tarefas:
+            _cartao_tarefa(curso_id, curso_nome, p, cache)
+
+    entregues = secoes["entregues"]
+    if entregues:
+        with st.expander(f"Entregues ({len(entregues)})", expanded=False):
+            for p in entregues:
+                _cartao_tarefa(curso_id, curso_nome, p, cache)
+
+
+# --------------------------------------------------------------------------
+# Aba Questões
+# --------------------------------------------------------------------------
+def aba_questoes(curso_id: int, curso_nome: str | None) -> None:
+    cache = estado("questoes")
+    revelar = estado("questoes_revelar")
+    col = st.columns([3, 1, 1])
+    tema = col[0].text_input("Tema das questões", key="tema_quest",
+                             placeholder="ex.: hipótese nula", label_visibility="collapsed")
+    quantidade = col[1].number_input("Qtd.", min_value=1, max_value=10, value=3, step=1,
+                                     label_visibility="collapsed")
+    if col[2].button("Gerar", type="primary", use_container_width=True):
+        if not tema.strip():
+            st.warning("Escreva um tema para gerar as questões.")
         else:
-            rotulo_dias = f"faltam {dias} dia(s)"
-        entregue = " · entregue" if p["submitted"] else ""
-        data = p["due_at"] or "—"
-        linha = f"**{p['nome']}** — {data} ({rotulo_dias}{entregue})"
-        if p["proximo"]:
-            st.warning(linha)
-        else:
-            st.markdown(linha)
+            garantir_modelo()
+            with st.spinner("O Gerador está montando as questões..."):
+                cache[(curso_id, tema.strip())] = acoes.executar_acao(
+                    "GERAR_QUESTOES", curso_id, tema=tema,
+                    quantidade=int(quantidade), course_name=curso_nome)
+
+    chave = (curso_id, tema.strip())
+    if not (tema.strip() and chave in cache):
+        return
+    res = cache[chave]
+    if res["erro"]:
+        st.error(res["erro"])
+        return
+    gerador = res["resultados"].get("gerador") or {}
+    if gerador.get("status") != "ok":
+        st.warning(gerador.get("mensagem") or "Não foi possível gerar as questões.")
+    for i, q in enumerate(gerador.get("questoes", []), start=1):
+        _cartao_questao(chave, i, q, revelar)
+
+
+def _cartao_questao(chave, i, q, revelar) -> None:
+    with st.container(border=True):
+        st.markdown(f"**Questão {i}** · {q.get('assunto', '')}")
+        st.markdown(q.get("enunciado", ""))
+        rid = f"{chave}_{i}"
+        if q.get("tipo") == "multipla_escolha":
+            alternativas = q.get("alternativas", {})
+            st.radio("Alternativas", list(alternativas),
+                     format_func=lambda k, a=alternativas: f"{k}) {a[k]}",
+                     key=f"rad_{rid}", label_visibility="collapsed", index=None)
+        if st.button("Ver resposta", key=f"ver_{rid}"):
+            revelar[rid] = True
+        if revelar.get(rid):
+            if q.get("tipo") == "multipla_escolha":
+                st.success(f"Resposta correta: **{q.get('correta')}**")
+            ref = q.get("trecho_referencia", {})
+            if ref:
+                st.caption(f"Fonte: {ref.get('arquivo')} · "
+                           f"p.{ref.get('pagina')}-{ref.get('pagina_fim')}")
 
 
 # --------------------------------------------------------------------------
@@ -273,24 +440,24 @@ def aba_prazos(curso_id: int) -> None:
 # --------------------------------------------------------------------------
 def main() -> None:
     curso_id, curso_nome = barra_lateral()
-    st.title("Glaux — assistente de estudos")
-
     if curso_id is None:
-        st.info("Selecione um curso na barra lateral para começar.")
+        st.title("🦉 Glaux")
+        st.info("Selecione uma matéria na barra lateral para começar.")
         return
 
-    mostrar_sincronizacao()
+    cabecalho(curso_id, curso_nome)
+    cartao_sincronizacao()
 
-    aba_mat, aba_res, aba_quest, aba_praz = st.tabs(
-        ["Materiais", "Resumo", "Questões", "Prazos"])
+    aba_mat, aba_res, aba_praz, aba_quest = st.tabs(
+        ["Materiais", "Resumo por tema", "Prazos", "Questões"])
     with aba_mat:
-        aba_materiais(curso_id)
+        aba_materiais(curso_id, curso_nome)
     with aba_res:
         aba_resumo(curso_id, curso_nome)
+    with aba_praz:
+        aba_prazos(curso_id, curso_nome)
     with aba_quest:
         aba_questoes(curso_id, curso_nome)
-    with aba_praz:
-        aba_prazos(curso_id)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,20 @@ def _limpar_nome_curso(nome: str) -> str:
     return _ESPACOS.sub(" ", n).strip()
 
 
+def _uso_tokens(response) -> Optional[Dict]:
+    """Extrai tokens de entrada/saída da resposta do ChatGroq, se disponível."""
+    um = getattr(response, "usage_metadata", None)
+    if isinstance(um, dict) and um:
+        return {"entrada": um.get("input_tokens"), "saida": um.get("output_tokens"),
+                "total": um.get("total_tokens")}
+    meta = getattr(response, "response_metadata", None) or {}
+    tu = meta.get("token_usage") or meta.get("usage")
+    if isinstance(tu, dict) and tu:
+        return {"entrada": tu.get("prompt_tokens"), "saida": tu.get("completion_tokens"),
+                "total": tu.get("total_tokens")}
+    return None
+
+
 def _remover_html(texto: Optional[str]) -> str:
     """Remove tags HTML e normaliza espaços (descrições do Canvas vêm em HTML)."""
     if not texto:
@@ -201,6 +215,18 @@ class TutorService:
                     por_pagina[chave] = r
         return sorted(por_pagina.values(), key=lambda r: r["score"], reverse=True)
 
+    # --- Recuperadores finos, reusados pela interface (NÃO chamam o LLM) --------
+    def buscar_tema(self, course_id: int, tema: str) -> List[Dict]:
+        """Trechos dos slides para um tema (busca no RAG, sem LLM)."""
+        return self._recuperar_trechos(course_id, [tema or ""])
+
+    def buscar_tarefa(self, course_id: int, titulo: str,
+                      descricao: Optional[str] = None) -> List[Dict]:
+        """Trechos dos slides para uma tarefa (consulta = título + descrição; sem LLM)."""
+        consulta = f"{(titulo or '').strip()} {_remover_html(descricao)}".strip()
+        consulta = consulta[:MAX_CARACTERES_CONSULTA]
+        return self._recuperar_trechos(course_id, [consulta])
+
     # --------------------------------------------------------------------------
     # 3. GERAÇÃO DE RESUMOS COM GROQ (baseada no material recuperado)
     # --------------------------------------------------------------------------
@@ -256,6 +282,35 @@ class TutorService:
                 sources_used=[],
             )
 
+        resumo, _ = self.resumir_trechos(course_id, course_name, trechos,
+                                         foco=foco, topic_title=topic_title)
+        return resumo
+
+    def resumir_trechos(
+        self,
+        course_id: int,
+        course_name: str,
+        trechos: List[Dict],
+        foco: str,
+        topic_title: str,
+    ) -> tuple["CourseSummary", Dict]:
+        """Gera o resumo citável a partir de trechos JÁ recuperados do RAG.
+
+        Separa a GERAÇÃO (uma chamada ao LLM, mais uma reescrita só quando a
+        auditoria acha frases sem citação) da RECUPERAÇÃO: assim a interface pode
+        montar os trechos como quiser — um arquivo específico, um tema ou uma
+        tarefa — e reusar o mesmo cuidado com citação. Devolve (CourseSummary,
+        detalhes), com `detalhes` trazendo modelo, tokens e nº de chamadas ao LLM
+        (para o painel técnico da interface).
+        """
+        detalhes = {"modelo": self.model_name, "tokens": None, "chamadas_llm": 0}
+        if not trechos:
+            return CourseSummary(
+                course_id=course_id, course_name=course_name,
+                topic_title="Matéria não indexada", key_points=[],
+                summary_text=MSG_SEM_RESUMO, sources_used=[],
+            ), detalhes
+
         contexto = "\n\n".join(
             f"[{r['arquivo']}, p.{r['pagina']}-{r['pagina_fim']}] {r['texto']}"
             for r in trechos
@@ -279,13 +334,16 @@ class TutorService:
         ]
 
         response = self._obter_llm().invoke(messages)
+        detalhes["chamadas_llm"] += 1
+        detalhes["tokens"] = _uso_tokens(response)
         texto = (response.content or "").strip()
 
-        # Com --tema, o LLM às vezes devolve resposta vazia; tenta mais uma vez
-        # antes de cair na mensagem de fallback.
-        if not texto and tema and tema.strip():
-            print(f" [Tutor] Resposta vazia do LLM para o tema '{tema.strip()}'; tentando mais uma vez...")
+        # O LLM às vezes devolve resposta vazia; tenta mais uma vez antes do fallback.
+        if not texto:
+            print(f" [Tutor] Resposta vazia do LLM para '{foco}'; tentando mais uma vez...")
             response = self._obter_llm().invoke(messages)
+            detalhes["chamadas_llm"] += 1
+            detalhes["tokens"] = _uso_tokens(response)
             texto = (response.content or "").strip()
 
         # Citação inline garantida: se a auditoria achar frases sem citação (e
@@ -295,6 +353,7 @@ class TutorService:
             if faltantes:
                 print(f" [Tutor] {len(faltantes)} frase(s) sem citação inline; reescrevendo uma vez...")
                 reescrito = (self._reescrever_com_citacao(texto, contexto) or "").strip()
+                detalhes["chamadas_llm"] += 1
                 if reescrito and len(frases_sem_citacao(reescrito)) <= len(faltantes):
                     texto = reescrito
                 restantes = frases_sem_citacao(texto)
@@ -311,7 +370,7 @@ class TutorService:
             key_points=[],
             summary_text=texto,
             sources_used=fontes,
-        )
+        ), detalhes
 
     def _reescrever_com_citacao(self, resumo: str, contexto: str) -> str:
         """Reescreve o resumo com a citação ao final de cada frase, sem mudar o conteúdo."""

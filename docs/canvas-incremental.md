@@ -411,47 +411,110 @@ Abre em `http://localhost:8501`. Precisa do `.env` preenchido (`CANVAS_API_KEY`,
 `CANVAS_API_URL`, `GROQ_API_KEY`) e do curso já em `data/raw/<id>/` com índice no
 Chroma (rode a sincronização ou `python src/graph.py --curso <id> --tema ...` antes).
 
+### Regra de ouro (quando a LLM é chamada)
+
+- A LLM (Groq) **só é chamada dentro do clique de um botão**. Abrir a página, trocar de
+  aba, trocar de curso e qualquer rerun do Streamlit **não** chamam a LLM. Os resultados
+  ficam em `st.session_state`; o `streamlit_app.py` só desenha a tela.
+- O modelo de embeddings E5 carrega **sob demanda** (`st.cache_resource` + `garantir_modelo`),
+  só antes de uma busca semântica (resumo por tema ou por tarefa). O resumo de um arquivo
+  busca no Chroma só por metadata (curso + arquivo), sem embeddings nem LLM.
+- Teste que trava essa regra: `tests/test_acoes.py` (abrir/trocar de curso com um tutor
+  espião que falha se a LLM for tocada; e um resumo em cache que não chama a LLM de novo).
+
 ### Arquitetura
 
 - **`app/streamlit_app.py`** só conhece **`src/interface/acoes.py`**; não importa os
-  agentes diretamente.
+  agentes diretamente. **Toda a lógica** (sincronização, resumos, cache, estatísticas)
+  está em `acoes.py`, em funções que o front final reaproveita.
 - **`executar_acao(action, course_id, tema, quantidade, forcar)`** monta o `GlauxState`,
-  decide o plano (quais agentes rodam, na ordem) e mede o tempo de cada etapa. Devolve
-  `agentes` (ordem), `tempos` (por agente), `tempo_sincronizacao` (só o Canvas),
-  `resultados` (por agente) e `erro` (mensagem amigável ou `None`).
-- As ações usam **exatamente** os valores de `state.action` do agente orquestrador
-  (`origin/orquestrador`): `SINCRONIZAR_CANVAS`, `GERAR_CRONOGRAMA`, `GERAR_RESUMO`,
-  `GERAR_QUESTOES`, `FLUXO_COMPLETO`. Enquanto o nó do orquestrador não entra no
-  `graph.py`, é a própria `executar_acao` que roteia; quando entrar, ela passa a só
-  definir `state.action` e chamar o grafo (documentado no topo de `acoes.py`).
-- O plano segue a lógica do `OrchestratorService` (pula o Canvas quando já há dados
-  locais, salvo "forçar varredura completa"), com uma diferença: **`GERAR_QUESTOES`
-  não passa pelo Tutor** — o Gerador lê o RAG direto e não depende do resumo.
-- O modelo de embeddings E5 é carregado uma vez via `st.cache_resource`.
-- Erros viram mensagens claras, sem stack trace na tela: token inválido, `CANVAS_API_URL`
-  ausente, Canvas fora do ar, Groq indisponível e curso sem índice.
+  decide o plano (quais agentes rodam, na ordem) e mede o tempo de cada etapa. Usado para
+  `SINCRONIZAR_CANVAS` e `GERAR_QUESTOES`. Devolve `agentes` (ordem), `tempos` (por agente),
+  `tempo_sincronizacao` (só o Canvas), `resultados` e `erro` (mensagem amigável ou `None`).
+- **Resumos citáveis** (`resumir_arquivo`, `resumir_tema`, `resumir_tarefa`): recuperam os
+  trechos (sem LLM) e delegam a geração a `TutorService.resumir_trechos` (uma chamada ao
+  LLM, com a mesma auditoria/reescrita de citação do Tutor). Devolvem um dicionário comum
+  com `summary_text`, `sources_used`, `em_cache`, `recusa` e `detalhes` (trechos usados com
+  score, modelo, tokens, nº de chamadas à LLM, tempo).
+- **Cache de resumos** em `data/processed/resumos_cache.json`, com chave
+  `(curso, tipo, alvo, ids dos chunks usados)`. Se o resumo já existe, volta na hora com o
+  selo "resumo salvo" e **sem** chamar a LLM; se o material mudou (ids diferentes), a chave
+  muda e um novo resumo é gerado só no clique ("Gerar de novo" força com `forcar=True`).
+- **Estatísticas sem LLM:** `resumo_estatisticas` (PDFs por categoria + total de chunks),
+  `contar_chunks`, `trechos_do_arquivo` (Chroma por curso + arquivo, no máximo ~12 trechos,
+  amostrados de forma espaçada para cobrir o PDF e manter a chave do cache determinística).
+- **Nomes das matérias** ficam em `data/processed/cursos_nomes.json` (`nomes_cursos` /
+  `registrar_nomes_cursos`): o seletor mostra o nome sem bater na API a cada rerun; o botão
+  "Atualizar nomes das matérias" e cada sincronização atualizam esse arquivo.
+- O plano de `executar_acao` segue a lógica do `OrchestratorService` (pula o Canvas quando
+  já há dados locais, salvo "forçar varredura completa"); **`GERAR_QUESTOES` não passa pelo
+  Tutor** (o Gerador lê o RAG direto).
+- Erros viram mensagens claras, sem stack trace (`erro_amigavel`): token inválido,
+  `CANVAS_API_URL` ausente, Canvas fora do ar, Groq indisponível e curso sem índice.
 
 ### O que cada parte faz
 
 - **Barra lateral:** usuário autenticado (nome vindo do Canvas, o token nunca aparece);
-  seleção do curso (pastas em `data/raw/` + botão "Listar cursos do Canvas" para trazer
-  os nomes); botão "Sincronizar Canvas" com a opção "Forçar varredura completa".
-- **Resultado da sincronização:** novos, atualizados, migrados, pulados, pendentes da LLM,
-  contagem por categoria, requisições ao Canvas e tempo da sincronização.
-- **Aba Materiais:** arquivos do `_arquivos.json` agrupados por categoria, com nome,
-  páginas e origem da classificação (regra ou LLM).
-- **Aba Resumo:** campo de tema → resumo do Tutor em markdown com as citações inline e a
-  lista de fontes (arquivo e página) logo abaixo.
-- **Aba Questões:** tema + quantidade → questões do Gerador (enunciado, alternativas,
-  resposta correta e o trecho de referência citado).
-- **Aba Prazos:** tarefas do `assignments.json` ordenadas por data, destacando as dos
-  próximos 7 dias.
-- **Rodapé de cada ação:** "Agentes executados: Canvas → Tutor …" com o tempo de cada um.
+  seleção da matéria (pastas em `data/raw/`, com o nome persistido); botão "Sincronizar com
+  o Canvas" com as opções "Todas as matérias" e "Forçar varredura completa".
+- **Sincronização:** se há PDFs novos/atualizados, aviso de sucesso com a lista (nome,
+  categoria, novo/atualizado); se não há nada, "Nenhum material novo no Canvas — tudo em
+  dia" com o tempo; bloqueados ou pendentes da LLM entram num aviso à parte; erro de token
+  ou rede vira mensagem clara. O painel "Detalhes técnicos" traz requisições, onde a
+  listagem parou, tempo só do Canvas, se reindexou e os chunks do curso.
+- **Topo da página:** resumo fixo da matéria — nº de PDFs por categoria e total de chunks.
+- **Aba Materiais:** arquivos por categoria (nome, páginas, classificado por regra ou LLM);
+  em cada um, "Resumir esta aula" → resumo do Tutor só com os trechos daquele PDF, citando
+  `[arquivo, p.X-Y]`.
+- **Aba Resumo por tema:** campo de tema → resumo do Tutor (busca nos slides) com citações
+  inline e as fontes abaixo. Tema fora do material cai na recusa do Tutor.
+- **Aba Prazos:** tarefas do `assignments.json` por data, destacando as dos próximos 7 dias;
+  em cada tarefa pendente, "Resumir o conteúdo desta tarefa" (consulta = título + descrição).
+- **Aba Questões:** mantida (tema + quantidade → questões do Gerador, só no clique).
+- **Painel "Detalhes técnicos"** (fechado por padrão) em cada ação: na sincronização, os
+  dados do Canvas/índice; nos resumos, agente e tempo, modelo da LLM, tokens (quando a Groq
+  devolve), trechos usados com score e se veio do cache.
 
-### Tempo medido (curso 93527, máquina de origem, CPU)
+### Visual e formatação (etapa 5)
 
-- **Sincronização** (sem downloads, 4 requisições ao Canvas): **~3,9 s**.
-- **Resumo** de "hipótese nula" (só Tutor, RAG + Groq): **~12 s**.
-- **Questões** (3 questões, só Gerador, RAG + Groq): **~2 s**.
+Visual limpo e consistente em todas as abas, só com componentes nativos do Streamlit
+e um único bloco pequeno de CSS (espaçamento e cantos dos cartões).
 
-A primeira busca do processo inclui a carga do modelo E5 (~1,1 GB), fora desses tempos.
+- **Tema:** `.streamlit/config.toml` — escuro, fundo neutro e **uma** cor de destaque
+  (`#6C8EFF`), fonte padrão. `set_page_config` em `layout="wide"`, título "Glaux", ícone 🦉.
+- **`src/interface/formatacao.py`** (lógica de apresentação, testada em
+  `tests/test_formatacao.py`): converte as datas do Canvas (UTC) para **America/Sao_Paulo**
+  e nunca mostra ISO cru. Texto relativo (`data_relativa`): "hoje às 23:59", "amanhã às
+  23:59", "em 12 dias (08/12)", "atrasada há 3 dias", "encerrada em 13/10". Plural e números
+  em pt-BR (`plural`, `numero_br`). Nomes legíveis sem tocar nos dados salvos: matéria sem o
+  código da turma e com numeral romano preservado (`nome_materia`:
+  "218131 - MÉTODOS … (MAT)" → "Métodos de Computação Experimental e Quantitativa";
+  "PROJETO INTEGRADOR VI" → "Projeto Integrador VI"), arquivo (`nome_arquivo`) e título de
+  tarefa sem caixa alta forçada (`titulo_tarefa`). `status_prazo`/`secao_prazo` definem o
+  selo e a seção de cada tarefa.
+- **Cabeçalho:** nome da matéria (não o id) em destaque + linha de `st.metric`
+  (PDFs, Slides, Listas, Chunks e "Sincronizado há X").
+- **Cartões:** `st.container(border=True)` em tudo (resumos, tarefas, questões, materiais),
+  selos coloridos nativos (`:green-badge[…]` etc.) e sem divisores/linhas sobrando.
+- **Sincronização:** `st.toast` no clique + cartão na página (lista de novos/atualizados com
+  selo, ou "Tudo em dia — nenhum material novo (3,9 s)").
+- **Prazos:** seções "Atrasadas → Hoje → Próximos 7 dias → Mais adiante → Entregues"
+  (a última recolhida); cada tarefa num cartão com selo de status; "Resumir o conteúdo desta
+  tarefa" só nas pendentes; entregue nunca mostra alerta.
+- **Materiais:** grade de cartões por categoria (vazias ocultas) com nome legível, páginas e
+  selo "regra"/"IA"; "Resumir esta aula" só nos slides.
+- **Questões:** cartão numerado, múltipla escolha em `st.radio` e "Ver resposta" que revela
+  gabarito e fonte **sem** chamar a LLM de novo (os dados já estão no `session_state`).
+
+### Tempo medido (curso 93527, CPU)
+
+- **Sincronização** (sem downloads, 4 requisições ao Canvas): **~3,6 s**.
+- **Resumir esta aula** (aula03, 1 geração; às vezes 2 invocações com a reescrita de
+  citação): **~5 s**.
+- **Resumo por tema** "hipótese nula" (só Tutor, RAG + Groq): **~10 s**.
+- Repetir um resumo em cache: **instantâneo, 0 chamadas à LLM**.
+
+A primeira busca por tema/tarefa do processo inclui a carga do modelo E5 (~1,1 GB), fora
+desses tempos. Observação: como o `buscar` sempre devolve os k trechos mais próximos (sem
+score mínimo), um tema sem relação com o material pode gerar um resumo em vez da recusa —
+isso é comportamento do Tutor/RAG; a interface só exibe fielmente o que o Tutor devolve.
