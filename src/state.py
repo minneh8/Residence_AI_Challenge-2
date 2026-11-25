@@ -4,10 +4,11 @@ from pydantic import BaseModel, Field
 
 # Acoes estruturadas disparadas pelos botoes da interface web
 ActionType = Literal[
-    "SINCRONIZAR_CANVAS",   # Botao: Atualizar materias, PDFs, tarefas e avisos
+    "SINCRONIZAR_CANVAS",   # Botao: Atualizar materias, PDFs, tarefas e avisos + indexar RAG
+    "INDEXAR_RAG",          # Botao: Reindexar PDFs locais no ChromaDB
     "GERAR_CRONOGRAMA",     # Botao: Montar/atualizar apenas cronograma e prazos
-    "GERAR_RESUMO",         # Botao: Gerar resumo didatico de uma ou todas as materias
-    "GERAR_QUESTOES",       # Botao: Gerar lista de exercicios (Agente Gerador)
+    "GERAR_RESUMO",         # Botao: Gerar resumo didatico via RAG + Tutor
+    "GERAR_QUESTOES",       # Botao: Gerar lista de exercicios via RAG + Gerador
     "FLUXO_COMPLETO",       # Botao: Executar esteira padrao completa
 ]
 
@@ -62,6 +63,7 @@ class GlauxState(BaseModel):
     execution_plan: List[str] = Field(default_factory=list)
     next_node: Optional[str] = None
     plan_initialized: bool = False
+    rag_indexed_courses: List[int] = Field(default_factory=list)
     orchestrator_logs: List[str] = Field(default_factory=list)
 
     # 4. Dados produzidos pelos agentes especialistas

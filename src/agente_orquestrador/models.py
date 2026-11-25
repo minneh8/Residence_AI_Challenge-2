@@ -2,9 +2,9 @@
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
-# Nomes exatos dos nos registrados no StateGraph (src/graph.py)
 NodeName = Literal[
     "canvas_agent",
+    "rag_index_node",
     "tutor_agent",
     "question_generator_agent",
     "END",
@@ -12,13 +12,11 @@ NodeName = Literal[
 
 
 class OrchestratorPlan(BaseModel):
-    """
-    Contrato estruturado retornado pelo OrchestratorService ao analisar uma requisicao.
-    """
+    """Contrato estruturado do plano de execucao montado pelo Orquestrador."""
 
     steps: List[NodeName] = Field(
         default_factory=list,
-        description="Fila ordenada de nos que serao executados em sequencia.",
+        description="Sequencia ordenada de nos a serem executados.",
     )
     resolved_course_id: Optional[int] = Field(
         None,
@@ -26,5 +24,5 @@ class OrchestratorPlan(BaseModel):
     )
     reason: str = Field(
         ...,
-        description="Justificativa tecnica da rota escolhida pelo orquestrador.",
+        description="Justificativa tecnica da rota escolhida.",
     )
