@@ -382,9 +382,22 @@ def aba_prazos(curso_id: int, curso_nome: str | None) -> None:
 # --------------------------------------------------------------------------
 # Aba Questões
 # --------------------------------------------------------------------------
+# Campos opcionais que o gerador pode devolver (usa o primeiro que existir).
+CAMPOS_GABARITO = ("resposta_esperada", "resposta_modelo", "gabarito",
+                   "resposta_correta", "resposta")
+CAMPOS_EXPLICACAO = ("explicacao", "justificativa", "comentario")
+
+
+def _primeiro_campo(q: dict, chaves: tuple[str, ...]):
+    for k in chaves:
+        v = q.get(k)
+        if v:
+            return v
+    return None
+
+
 def aba_questoes(curso_id: int, curso_nome: str | None) -> None:
     cache = estado("questoes")
-    revelar = estado("questoes_revelar")
     col = st.columns([3, 1, 1])
     tema = col[0].text_input("Tema das questões", key="tema_quest",
                              placeholder="ex.: hipótese nula", label_visibility="collapsed")
@@ -396,14 +409,19 @@ def aba_questoes(curso_id: int, curso_nome: str | None) -> None:
         else:
             garantir_modelo()
             with st.spinner("O Gerador está montando as questões..."):
-                cache[(curso_id, tema.strip())] = acoes.executar_acao(
+                res = acoes.executar_acao(
                     "GERAR_QUESTOES", curso_id, tema=tema,
                     quantidade=int(quantidade), course_name=curso_nome)
+            # Cada geração ganha um id novo: ele entra nas chaves dos widgets,
+            # então respostas marcadas/reveladas da rodada anterior não vazam.
+            st.session_state.geracao_questoes = st.session_state.get("geracao_questoes", 0) + 1
+            cache[(curso_id, tema.strip())] = {
+                "res": res, "geracao": st.session_state.geracao_questoes}
 
     chave = (curso_id, tema.strip())
     if not (tema.strip() and chave in cache):
         return
-    res = cache[chave]
+    res, geracao = cache[chave]["res"], cache[chave]["geracao"]
     if res["erro"]:
         st.error(res["erro"])
         return
@@ -411,28 +429,79 @@ def aba_questoes(curso_id: int, curso_nome: str | None) -> None:
     if gerador.get("status") != "ok":
         st.warning(gerador.get("mensagem") or "Não foi possível gerar as questões.")
     for i, q in enumerate(gerador.get("questoes", []), start=1):
-        _cartao_questao(chave, i, q, revelar)
+        _cartao_questao(f"g{geracao}_{curso_id}_{tema.strip()}_{i}", i, q)
 
 
-def _cartao_questao(chave, i, q, revelar) -> None:
+def _fonte(q: dict) -> None:
+    ref = q.get("trecho_referencia") or {}
+    if ref:
+        st.caption(f"Onde estudar: {ref.get('arquivo')} · "
+                   f"p.{ref.get('pagina')}-{ref.get('pagina_fim')}")
+
+
+def _cartao_questao(rid: str, i: int, q: dict) -> None:
+    """`rid` já inclui o id da geração, então cada rodada começa limpa."""
+    conferidas = estado("questoes_conferidas")   # rid -> alternativa marcada / True
     with st.container(border=True):
         st.markdown(f"**Questão {i}** · {q.get('assunto', '')}")
         st.markdown(q.get("enunciado", ""))
-        rid = f"{chave}_{i}"
+
         if q.get("tipo") == "multipla_escolha":
-            alternativas = q.get("alternativas", {})
-            st.radio("Alternativas", list(alternativas),
-                     format_func=lambda k, a=alternativas: f"{k}) {a[k]}",
-                     key=f"rad_{rid}", label_visibility="collapsed", index=None)
-        if st.button("Ver resposta", key=f"ver_{rid}"):
-            revelar[rid] = True
-        if revelar.get(rid):
-            if q.get("tipo") == "multipla_escolha":
-                st.success(f"Resposta correta: **{q.get('correta')}**")
-            ref = q.get("trecho_referencia", {})
-            if ref:
-                st.caption(f"Fonte: {ref.get('arquivo')} · "
-                           f"p.{ref.get('pagina')}-{ref.get('pagina_fim')}")
+            _questao_multipla(rid, q, conferidas)
+        else:
+            _questao_discursiva(rid, q, conferidas)
+
+
+def _questao_multipla(rid: str, q: dict, conferidas: dict) -> None:
+    alternativas = q.get("alternativas", {})
+    correta = q.get("correta")
+    st.radio("Alternativas", list(alternativas),
+             format_func=lambda k, a=alternativas: f"{k}) {a[k]}",
+             key=f"rad_{rid}", label_visibility="collapsed", index=None)
+
+    if st.button("Conferir resposta", key=f"conf_{rid}"):
+        marcada = st.session_state.get(f"rad_{rid}")
+        if marcada is None:
+            st.warning("Escolha uma alternativa antes de conferir.")
+        else:
+            conferidas[rid] = marcada          # trava o veredito no momento do clique
+
+    if rid not in conferidas:
+        return
+    marcada = conferidas[rid]
+    if marcada == correta:
+        st.success(f"Acertou! A resposta é **{correta}**) {alternativas.get(correta, '')}")
+    else:
+        st.error(f"Você marcou **{marcada}**) {alternativas.get(marcada, '')}")
+        st.success(f"Resposta correta: **{correta}**) {alternativas.get(correta, '')}")
+    explicacao = _primeiro_campo(q, CAMPOS_EXPLICACAO)
+    if explicacao:
+        st.info(f"**Por quê:** {explicacao}")
+    _fonte(q)
+
+
+def _questao_discursiva(rid: str, q: dict, conferidas: dict) -> None:
+    minha = st.text_area("Sua resposta", key=f"txt_{rid}", height=130,
+                         placeholder="Escreva sua resposta aqui antes de ver o gabarito...")
+
+    if st.button("Ver resposta esperada", key=f"ver_{rid}"):
+        if not minha.strip():
+            st.warning("Escreva sua resposta primeiro. Comparar com o gabarito ajuda mais.")
+        else:
+            conferidas[rid] = True
+
+    if rid not in conferidas:
+        return
+    gabarito = _primeiro_campo(q, CAMPOS_GABARITO)
+    if gabarito:
+        st.success(f"**Resposta esperada:** {gabarito}")
+    else:
+        st.info("Esta questão veio sem gabarito do gerador. "
+                "Compare sua resposta com o trecho do material abaixo.")
+    explicacao = _primeiro_campo(q, CAMPOS_EXPLICACAO)
+    if explicacao:
+        st.info(f"**Por quê:** {explicacao}")
+    _fonte(q)
 
 
 # --------------------------------------------------------------------------
