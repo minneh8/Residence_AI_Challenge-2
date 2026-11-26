@@ -2,8 +2,9 @@
 
 Fluxo de gerar_questoes():
 
-    buscar trechos no RAG
-    -> o RAG não devolveu nada (curso não indexado): "sem_material"
+    buscar trechos no RAG (só listas, slides e livros: buscar_para_gerador)
+    -> o RAG não devolveu nada (curso não indexado ou sem material dessas
+       categorias): "sem_material"
     -> descartar os fracos (score < SCORE_MINIMO); nenhum sobrou: "sem_material"
     -> chamar o LLM -> validar a saída no código -> embaralhar as alternativas -> "ok"
     -> o LLM respondeu {"sem_material": true, "questoes": []}: "sem_material"
@@ -28,7 +29,7 @@ from langchain_groq import ChatGroq
 from prompts.agente_gerador_prompts import PROMPT_SISTEMA_GERADOR, montar_prompt_usuario
 from pydantic import TypeAdapter, ValidationError
 
-from src.rag import buscar as buscar_no_rag
+from src.rag.busca import buscar_para_gerador as buscar_no_rag
 
 from .models import LETRAS, Questao, QuestaoMultiplaEscolha, ResultadoGeracao
 
@@ -56,8 +57,8 @@ TEMPO_LIMITE_S = 60
 CAMINHO_ENV = Path(__file__).resolve().parents[2] / ".env"  # .env na raiz do projeto
 
 # Três motivos de "sem_material", cada um com o que o aluno pode fazer em seguida.
-MENSAGEM_CURSO_NAO_INDEXADO = (
-    "O material desta disciplina ainda não foi carregado no Glaux. "
+MENSAGEM_RAG_VAZIO = (
+    "Não encontrei slides, listas ou livros desta disciplina no Glaux. "
     "Tente de novo mais tarde ou avise o professor."
 )
 MENSAGEM_SEM_MATERIAL = (
@@ -304,8 +305,9 @@ def gerar_questoes(
     tema = tema.strip()
 
     recuperados = buscar(tema, course_id, k=max(K_MINIMO, quantidade))
-    if not recuperados:  # o buscar() do RAG só volta vazio quando o curso não está indexado
-        return ResultadoGeracao(status="sem_material", mensagem=MENSAGEM_CURSO_NAO_INDEXADO)
+    # Vazio: o curso não está indexado ou não tem chunks de listas, slides ou livros.
+    if not recuperados:
+        return ResultadoGeracao(status="sem_material", mensagem=MENSAGEM_RAG_VAZIO)
     trechos = selecionar_trechos(recuperados)
     if not trechos:
         return ResultadoGeracao(

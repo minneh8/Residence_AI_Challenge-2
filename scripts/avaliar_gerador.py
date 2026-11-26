@@ -143,7 +143,8 @@ def relatorio(linhas: list[dict], resumo: dict, curso: int, quantidade: int, hoj
         "",
         f"Gerado por `scripts/avaliar_gerador.py` em {hoje}. Curso {curso}, {quantidade} "
         f"questões por tema, uma geração por tema. Modelo `{service.MODELO}`, "
-        f"`K_MINIMO={service.K_MINIMO}`, `SCORE_MINIMO={service.SCORE_MINIMO}`.",
+        f"`K_MINIMO={service.K_MINIMO}`, `SCORE_MINIMO={service.SCORE_MINIMO}`. "
+        "Busca: `buscar_para_gerador` (listas, slides e livros).",
         "Só métricas automáticas: nenhum texto dos PDFs nem das questões.",
         "",
         "| grupo | tema | status | chamadas | falhas | tempo (s) | correta antes → depois |",
@@ -195,7 +196,8 @@ def main(argv=None, buscar=None, chamar_llm=None, dormir=time.sleep, relogio=tim
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if buscar is None:
-        from src.rag import buscar  # importa o RAG (e o modelo E5) só quando vai usar
+        # A mesma busca do gerador (só listas, slides e livros); importa o RAG e o E5 só aqui.
+        from src.rag.busca import buscar_para_gerador as buscar
 
     temas = [("dentro", t) for t in args.dentro] + [("fora", t) for t in args.fora]
     linhas = []
