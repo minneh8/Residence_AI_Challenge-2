@@ -7,7 +7,7 @@ Interface pública consumida pelos agentes:
 
 `categorias` restringe a busca às categorias de material do Agente Canvas
 (metadata "categoria" dos chunks: slides, listas, trabalho, livros, outros).
-O Tutor usa ["slides"]; o Gerador deve usar ["listas"] (ou listas + slides).
+O Tutor usa ["slides"]; o Gerador usa listas, slides e livros.
 
 Cada item retornado tem as chaves:
     texto      (str)   conteúdo do trecho
@@ -116,3 +116,8 @@ def buscar(pergunta: str, course_id: int, k: int = 5,
             categorias não for uma lista não vazia de strings.
     """
     return buscar_na_colecao(pergunta, course_id, k, COLECAO_PADRAO, categorias)
+
+
+def buscar_para_gerador(pergunta: str, course_id: int, k: int = 5) -> list[dict]:
+    """Recupera listas de exercícios e material de estudo da disciplina."""
+    return buscar(pergunta, course_id, k=k, categorias=["listas", "slides", "livros"])

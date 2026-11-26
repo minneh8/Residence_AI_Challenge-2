@@ -284,11 +284,15 @@ def test_sem_material_nao_chama_o_llm():
     assert buscar.chamadas[0]["pergunta"] == "redes neurais"
 
 
-def test_rag_sem_resultado_e_curso_nao_indexado():
+def test_rag_sem_resultado_e_sem_material_no_rag():
     llm = LLMFalso()
     resultado = gerar(BuscarFalso([]), llm)
     assert resultado.status == "sem_material"
-    assert resultado.mensagem == service.MENSAGEM_CURSO_NAO_INDEXADO
+    assert resultado.mensagem == (
+        "Não encontrei slides, listas ou livros desta disciplina no Glaux. "
+        "Tente de novo mais tarde ou avise o professor."
+    )
+    assert resultado.mensagem == service.MENSAGEM_RAG_VAZIO
     assert llm.chamadas == []
 
 

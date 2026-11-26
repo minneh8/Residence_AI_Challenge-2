@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.agente_gerador import service  # noqa: E402
 from src.agente_gerador.apresentacao import formatar  # noqa: E402
 from src.agente_gerador.models import ResultadoGeracao  # noqa: E402
-from src.rag import buscar as buscar_no_rag  # noqa: E402
+from src.rag.busca import buscar_para_gerador as buscar_no_rag  # noqa: E402
 
 CHAVES_TRECHO = {"texto", "arquivo", "pagina", "pagina_fim", "score"}  # o formato do buscar()
 

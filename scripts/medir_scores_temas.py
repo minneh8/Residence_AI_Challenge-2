@@ -3,7 +3,7 @@
 Uso (a partir da raiz do projeto, a pasta que tem src/ e prompts/):
     python scripts/medir_scores_temas.py --curso N --dentro "<tema>" ... --fora "<tema>" ...
 
-Para cada tema, chama buscar(tema, curso, k=1) e imprime só o score do trecho
+Para cada tema, chama buscar_para_gerador(tema, curso, k=1) e imprime só o score do trecho
 mais parecido, nunca o texto: a ideia é escolher o SCORE_MINIMO do gerador
 (src/agente_gerador/service.py) olhando onde os temas de dentro e os de fora
 se separam. Precisa da disciplina indexada (rode a esteira com --curso N antes).
@@ -38,12 +38,16 @@ def main(argv: list[str] | None = None, buscar=None) -> int:
         parser.error("informe pelo menos um tema em --dentro ou --fora.")
 
     if buscar is None:
-        from src.rag import buscar  # importa o RAG (e o modelo E5) só quando vai usar
+        # A mesma busca do gerador (só listas, slides e livros); importa o RAG e o E5 só aqui.
+        from src.rag.busca import buscar_para_gerador as buscar
 
     linhas = [("dentro", tema) for tema in args.dentro] + [("fora", tema) for tema in args.fora]
     scores = medir([tema for _, tema in linhas], args.curso, buscar)
     if all(score is None for score in scores):
-        print(f"ERRO: o curso {args.curso} não está indexado.", file=sys.stderr)
+        print(
+            f"ERRO: o curso {args.curso} não está indexado ou não tem slides, listas ou livros.",
+            file=sys.stderr,
+        )
         return 2
 
     print(f"curso {args.curso} | SCORE_MINIMO atual: {SCORE_MINIMO}")
